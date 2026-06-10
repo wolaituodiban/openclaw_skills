@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Skill-local scratch (per-skill)
+# Uncomment per skill if it produces these:
+# skill-testing/secret.json
+# <skill>/tmp/
+# <skill>/.cache/
+
+# Never commit secrets, even by accident
+*.pem
+*.key
+.env
+.env.*
+!.env.example
