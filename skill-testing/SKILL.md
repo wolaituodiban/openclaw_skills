@@ -1,11 +1,9 @@
 ---
 name: skill-testing
-description: "Skill testing convention for OpenClaw skills that ship scripts. Triggers on: writing a tests/ directory, adding unit tests, adding integration tests, deciding unit vs integration split, naming test files to match script modules, asserting every return and raise branch of a function with exact value checks, asserting every CLI / multi-script output. Defines the tests/{unit,integration}/ layout, the basename-aligned naming rule, and the branch-and-output coverage rules."
+description: "Skill testing convention: tests/{unit,integration}/ layout, basename-aligned naming, branch-and-output coverage rules."
 ---
 
 # skill-testing
-
-Minimal, language-agnostic convention for the `tests/` directory of an OpenClaw skill.
 
 ## Directory layout
 
