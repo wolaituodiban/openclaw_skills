@@ -3,10 +3,24 @@
 The dashscope API key is read by the dashscope SDK from the DASHSCOPE_API_KEY
 environment variable. Set it in ~/.openclaw/.env (see SKILL.md, "Setup").
 
-Usage example:
-    python3 dashscope_image.py \\
-        --image input.jpg \\
+Usage examples:
+
+    # 1 image: image edit / style transfer
+    python3 dashscope_image.py input.jpg \\
         --prompt "Turn this cat into a dog" \\
+        --output-dir /path/to/out
+
+    # 2+ images: multi-reference edit; output size is the per-axis
+    # average of input sizes, rounded down to a multiple of 8
+    python3 dashscope_image.py a.jpg b.png \\
+        --prompt "Combine these into one scene" \\
+        --output-dir /path/to/out
+
+    # 0 images: text-to-image (requires a model that supports it,
+    # e.g. qwen-image; pass --model explicitly; --size required)
+    python3 dashscope_image.py \\
+        --prompt "A cat wearing a hat" \\
+        --size 1024*1024 \\
         --output-dir /path/to/out
 """
 
@@ -88,25 +102,49 @@ def _extract_urls(response: MultiModalConversationResponse) -> list:
 
 
 @typechecked
+def _inferred_size(images: list[str]) -> str:
+    """Per-axis average of input image dimensions, floored to a multiple of 8.
+
+    Renders as '<W>*<H>'. Raises ValueError when the image list is empty
+    (caller must pass --size explicitly for text-to-image).
+    """
+    if not images:
+        raise ValueError(
+            "_inferred_size: cannot infer size from zero input images. "
+            "Pass --size explicitly (e.g. --size 1024*1024)."
+        )
+    widths: list[int] = []
+    heights: list[int] = []
+    for p in images:
+        w, h = _local_image_size(p).split("*")
+        widths.append(int(w))
+        heights.append(int(h))
+    avg_w = (sum(widths) // len(widths)) // 8 * 8
+    avg_h = (sum(heights) // len(heights)) // 8 * 8
+    if avg_w <= 0 or avg_h <= 0:
+        raise ValueError(
+            f"_inferred_size: computed non-positive size {avg_w}*{avg_h} "
+            f"from inputs {images}. Pass --size explicitly."
+        )
+    return f"{avg_w}*{avg_h}"
+
+
+@typechecked
 def dashscope_image(
-    image: str,
+    images: list[str],
     prompt: str,
     output_dir: str,
     model: str,
     size: str | None,
     n: int,
 ) -> list[Path]:
-    effective_size = size if size is not None else _local_image_size(image)
+    effective_size = size if size is not None else _inferred_size(images)
+    content: list[dict] = [{"image": _image_value(p)} for p in images]
+    content.append({"text": prompt})
     response = MultiModalConversation.call(
         api_key=os.environ["DASHSCOPE_API_KEY"],
         model=model,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"image": _image_value(image)},
-                {"text": prompt},
-            ],
-        }],
+        messages=[{"role": "user", "content": content}],
         n=n,
         size=effective_size,
     )
@@ -142,9 +180,11 @@ def dashscope_image(
 def main() -> NoReturn:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--image",
-        required=True,
-        help="Local image path (PNG or JPEG) to send to the model as the seed.",
+        "images",
+        nargs="*",
+        help="Zero or more local image paths (jpg/jpeg/png/gif/bmp). "
+             "Encoded as data URLs and sent to the model. Omit for text-to-image "
+             "(requires a model that supports it, e.g. qwen-image).",
     )
     parser.add_argument(
         "--prompt",
@@ -155,7 +195,7 @@ def main() -> NoReturn:
         "--output-dir",
         default=DEFAULT_OUTPUT_DIR,
         help=f"Directory to write generated images to (created if missing). "
-             f"Files are named 1.png, 2.png, ... "
+             f"Files are named '<index>_<timestamp>.png' (e.g. '1_20260619-202500.png'). "
              f"Default: {DEFAULT_OUTPUT_DIR} (tilde is expanded to the user's home directory).",
     )
     parser.add_argument(
@@ -166,7 +206,11 @@ def main() -> NoReturn:
     parser.add_argument(
         "--size",
         default=None,
-        help="image size in '<width>*<height>' form. If omitted, read from the input image (PNG/JPEG only).",
+        help="image size in '<width>*<height>' form. If omitted: "
+             "with one image, read from the image (PNG/JPEG only); "
+             "with multiple images, per-axis average of input sizes, "
+             "floored to a multiple of 8; "
+             "with zero images, this argument is required.",
     )
     parser.add_argument(
         "--n",
@@ -177,7 +221,7 @@ def main() -> NoReturn:
     )
     args = parser.parse_args()
     dashscope_image(
-        image=args.image,
+        images=args.images,
         prompt=args.prompt,
         output_dir=os.path.expanduser(args.output_dir),
         model=args.model,

@@ -34,7 +34,7 @@ def _run(image: Path, outdir: Path) -> subprocess.CompletedProcess:
         [
             sys.executable,
             str(SCRIPT),
-            "--image", str(image),
+            str(image),
             "--prompt", "make it blue",
             "--output-dir", str(outdir),
         ],

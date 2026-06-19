@@ -218,7 +218,7 @@ class DashscopeImageTest(unittest.TestCase):
             "scripts.dashscope_image.urllib.request.urlretrieve"
         ) as retrieve:
             dashscope_image(
-                image=str(self.image),
+                images=[str(self.image)],
                 prompt="make it a dog",
                 output_dir=str(self.outdir),
                 model="qwen-image-edit-plus",
@@ -257,7 +257,7 @@ class DashscopeImageTest(unittest.TestCase):
             "scripts.dashscope_image.MultiModalConversation.call", return_value=fake
         ) as call, mock.patch("scripts.dashscope_image.urllib.request.urlretrieve"):
             dashscope_image(
-                image=str(self.image),
+                images=[str(self.image)],
                 prompt="x",
                 output_dir=str(self.outdir),
                 model="qwen-image-edit-plus",
@@ -272,7 +272,7 @@ class DashscopeImageTest(unittest.TestCase):
              mock.patch("scripts.dashscope_image.urllib.request.urlretrieve"):
             self.assertFalse(self.outdir.exists())
             dashscope_image(
-                image=str(self.image),
+                images=[str(self.image)],
                 prompt="x",
                 output_dir=str(self.outdir),
                 model="qwen-image-edit-plus",
@@ -291,7 +291,7 @@ class DashscopeImageTest(unittest.TestCase):
              mock.patch("scripts.dashscope_image.urllib.request.urlretrieve") as retrieve:
             with self.assertRaisesRegex(RuntimeError, "dashscope_image.*401.*InvalidApiKey") as cm:
                 dashscope_image(
-                    image=str(self.image),
+                    images=[str(self.image)],
                     prompt="x",
                     output_dir=str(self.outdir),
                     model="qwen-image-edit-plus",
@@ -300,6 +300,90 @@ class DashscopeImageTest(unittest.TestCase):
                 )
         self.assertIn("DASHSCOPE_API_KEY", str(cm.exception))
         retrieve.assert_not_called()
+
+
+class MultiImageTest(unittest.TestCase):
+    """Verify the multi-image path: averaged size + multi-image content array."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tmpdir = Path(self.tmp.name)
+        self.img_a = self.tmpdir / "a.png"
+        self.img_a.write_bytes(_png_with_dims(1024, 768))  # 1024 / 8 == 128
+        self.img_b = self.tmpdir / "b.png"
+        self.img_b.write_bytes(_png_with_dims(800, 600))   # 800  / 8 == 100
+        self.outdir = self.tmpdir / "out"
+        self._env_patch = mock.patch.dict(os.environ, {"DASHSCOPE_API_KEY": "test-key"})
+        self._env_patch.start()
+        self.addCleanup(self._env_patch.stop)
+
+    def test_averages_size_floors_to_multiple_of_8(self) -> None:
+        # avg_w = (1024 + 800) / 2 = 912;  912 // 8 * 8 = 912 (already mult of 8)
+        # avg_h = (768 + 600) / 2 = 684;  684 // 8 * 8 = 680
+        fake = _fake_response(["https://x/1.png"])
+        with mock.patch("scripts.dashscope_image.MultiModalConversation.call", return_value=fake) as call, \
+             mock.patch("scripts.dashscope_image.urllib.request.urlretrieve"):
+            dashscope_image(
+                images=[str(self.img_a), str(self.img_b)],
+                prompt="x",
+                output_dir=str(self.outdir),
+                model="qwen-image-edit-plus",
+                size=None,
+                n=1,
+            )
+        self.assertEqual(call.call_args.kwargs["size"], "912*680")
+
+    def test_content_array_contains_all_images_then_text(self) -> None:
+        fake = _fake_response(["https://x/1.png"])
+        with mock.patch("scripts.dashscope_image.MultiModalConversation.call", return_value=fake) as call, \
+             mock.patch("scripts.dashscope_image.urllib.request.urlretrieve"):
+            dashscope_image(
+                images=[str(self.img_a), str(self.img_b)],
+                prompt="merge",
+                output_dir=str(self.outdir),
+                model="qwen-image-edit-plus",
+                size="1024*1024",
+                n=1,
+            )
+        content = call.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(len(content), 3)
+        self.assertTrue(content[0]["image"].startswith("data:image/png;base64,"))
+        self.assertTrue(content[1]["image"].startswith("data:image/png;base64,"))
+        self.assertEqual(content[2], {"text": "merge"})
+
+    def test_zero_images_with_size_passed_works(self) -> None:
+        """Text-to-image path: no images, no size inference, prompt-only content."""
+        fake = _fake_response(["https://x/1.png"])
+        with mock.patch("scripts.dashscope_image.MultiModalConversation.call", return_value=fake) as call, \
+             mock.patch("scripts.dashscope_image.urllib.request.urlretrieve"):
+            dashscope_image(
+                images=[],
+                prompt="a cat",
+                output_dir=str(self.outdir),
+                model="qwen-image",
+                size="1024*1024",
+                n=1,
+            )
+        self.assertEqual(call.call_args.kwargs["size"], "1024*1024")
+        content = call.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(content, [{"text": "a cat"}])
+
+    def test_zero_images_without_size_raises(self) -> None:
+        """Local early failure: --size required when no images."""
+        with mock.patch("scripts.dashscope_image.MultiModalConversation.call") as call, \
+             mock.patch("scripts.dashscope_image.urllib.request.urlretrieve"):
+            with self.assertRaises(ValueError) as cm:
+                dashscope_image(
+                    images=[],
+                    prompt="a cat",
+                    output_dir=str(self.outdir),
+                    model="qwen-image",
+                    size=None,
+                    n=1,
+                )
+        self.assertIn("cannot infer size", str(cm.exception))
+        call.assert_not_called()
 
 
 if __name__ == "__main__":
