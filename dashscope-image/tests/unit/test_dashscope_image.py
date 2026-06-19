@@ -234,9 +234,21 @@ class DashscopeImageTest(unittest.TestCase):
         self.assertTrue(content[0]["image"].startswith("data:image/png;base64,"))
         self.assertEqual(content[1]["text"], "make it a dog")
         self.assertEqual(retrieve.call_count, 2)
+        saved_paths = [c.args[1] for c in retrieve.call_args_list]
+        self.assertEqual(len(saved_paths), 2)
+        for p in saved_paths:
+            self.assertTrue(p.parent == self.outdir)
+            self.assertRegex(
+                p.name,
+                r"^[12]_\d{8}-\d{6}\.png$",
+                f"unexpected filename: {p.name}",
+            )
+        self.assertEqual(saved_paths[0].name.split("_")[0], "1")
+        self.assertEqual(saved_paths[1].name.split("_")[0], "2")
         self.assertEqual(
-            [c.args[1] for c in retrieve.call_args_list],
-            [self.outdir / "1.png", self.outdir / "2.png"],
+            saved_paths[0].name.split("_", 1)[1],
+            saved_paths[1].name.split("_", 1)[1],
+            "all images from the same call should share a timestamp",
         )
 
     def test_size_inferred_from_input_when_omitted(self) -> None:

@@ -61,7 +61,13 @@ class CliEndToEndTest(unittest.TestCase):
     def test_generates_image_and_saves_to_output_dir(self) -> None:
         result = _run(self.image, self.outdir)
         self.assertEqual(result.returncode, 0)
-        out_file = self.outdir / "1.png"
+        # Filename pattern: <index>_<timestamp>.png; for n=1 we expect exactly one.
+        candidates = list(self.outdir.glob("[0-9]_*_*.png"))
+        self.assertEqual(
+            len(candidates), 1,
+            f"expected exactly one timestamped PNG, got {candidates}",
+        )
+        out_file = candidates[0]
         self.assertTrue(out_file.exists(), f"expected {out_file} to exist")
         # PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
         self.assertEqual(out_file.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")

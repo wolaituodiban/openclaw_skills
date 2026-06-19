@@ -12,6 +12,7 @@ Usage example:
 
 import argparse
 import base64
+import datetime as _dt
 import mimetypes
 import os
 import struct
@@ -25,6 +26,8 @@ from typeguard import typechecked
 
 DEFAULT_MODEL = "qwen-image-edit-plus"
 DEFAULT_N = 1
+DEFAULT_OUTPUT_DIR = "~/.openclaw/media/tool-image-generation"
+FILENAME_TIMESTAMP_FMT = "%Y%m%d-%H%M%S"
 
 
 # --- input / compute boundaries ---
@@ -92,7 +95,7 @@ def dashscope_image(
     model: str,
     size: str | None,
     n: int,
-) -> None:
+) -> list[Path]:
     effective_size = size if size is not None else _local_image_size(image)
     response = MultiModalConversation.call(
         api_key=os.environ["DASHSCOPE_API_KEY"],
@@ -118,9 +121,19 @@ def dashscope_image(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    timestamp = _dt.datetime.now().strftime(FILENAME_TIMESTAMP_FMT)
+    saved: list[Path] = []
+    print(
+        f"dashscope-image: saving {n} image(s) to {out}",
+        flush=True,
+    )
     for index, url in enumerate(_extract_urls(response), start=1):
-        dest = out / f"{index}.png"
+        dest = out / f"{index}_{timestamp}.png"
         urllib.request.urlretrieve(url, dest)
+        saved.append(dest)
+        print(dest, flush=True)
+    print("dashscope-image: done", flush=True)
+    return saved
 
 
 # --- entry ---
@@ -140,8 +153,10 @@ def main() -> NoReturn:
     )
     parser.add_argument(
         "--output-dir",
-        required=True,
-        help="Directory to write generated images to (created if missing). Files are named 1.png, 2.png, ...",
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"Directory to write generated images to (created if missing). "
+             f"Files are named 1.png, 2.png, ... "
+             f"Default: {DEFAULT_OUTPUT_DIR} (tilde is expanded to the user's home directory).",
     )
     parser.add_argument(
         "--model",
@@ -164,7 +179,7 @@ def main() -> NoReturn:
     dashscope_image(
         image=args.image,
         prompt=args.prompt,
-        output_dir=args.output_dir,
+        output_dir=os.path.expanduser(args.output_dir),
         model=args.model,
         size=args.size,
         n=args.n,

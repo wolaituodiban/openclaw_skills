@@ -46,13 +46,13 @@ the key. If the key is missing the SDK raises its own error.
 
 ## Inputs
 
-The script takes three required CLI arguments and three optional ones:
+The script takes two required CLI arguments and four optional ones:
 
 | Argument | Required? | What it is |
 |---|---|---|
 | `--image <path>` | yes | Local image file (jpg/jpeg/png/gif/bmp). Encoded as a `data:image/...;base64,...` URL and sent to the model as the edit/generation seed. |
 | `--prompt <text>` | yes | Text instruction for the model. |
-| `--output-dir <path>` | yes | Directory to save the generated images. Created if missing. Files are named `1.png`, `2.png`, ... in the order dashscope returns them. |
+| `--output-dir <path>` | no | Directory to save the generated images. Created if missing. Files are named `<index>_<timestamp>.png` (e.g. `1_20260619-202500.png`) in the order dashscope returns them. Default: `~/.openclaw/media/tool-image-generation` (tilde is expanded to the user's home directory). |
 | `--model <id>` | no | dashscope model id. Default: `qwen-image-edit-plus`. |
 | `--size <w*h>` | no | Image size in `<width>*<height>` form. Default: `1024*1024`. |
 | `--n <1-4>` | no | Number of images to generate. Default: `1`. |
@@ -60,15 +60,34 @@ The script takes three required CLI arguments and three optional ones:
 ## Output
 
 One PNG file per generated image, written to `--output-dir` as
-`1.png`, `2.png`, ... in the order dashscope returns them. The
-script writes no stdout on success; any error traceback goes to
-stderr and the process exits non-zero.
+`<index>_<timestamp>.png` (e.g. `1_20260619-202500.png`) in the
+order dashscope returns them. `<timestamp>` is local wall-clock
+time formatted as `YYYYMMDD-HHMMSS`; all images from a single
+call share the same timestamp.
+
+Stdout on success has three sections so both humans and agents
+can pick out the saved file paths at a glance:
+
+```
+dashscope-image: saving <N> image(s) to <output_dir>
+<output_dir>/1_<timestamp>.png
+<output_dir>/2_<timestamp>.png
+...
+dashscope-image: done
+```
+
+The file paths are the only lines that look like real filesystem
+paths — humans and agents can grep `^/` (or any anchored prefix)
+to extract them. Any error traceback goes to stderr and the
+process exits non-zero; the footer line is only printed on the
+success path.
 
 ## Workflow
 
-1. Parse CLI arguments. `--image` / `--prompt` / `--output-dir` are
-   required; `--model` / `--size` / `--n` fall back to the script
-   defaults.
+1. Parse CLI arguments. `--image` / `--prompt` are required;
+   `--output-dir` defaults to `~/.openclaw/media/tool-image-generation`
+   (tilde is expanded to the user's home directory via `os.path.expanduser`);
+   `--model` / `--size` / `--n` fall back to the script defaults.
 2. Resolve `--image` to a model-ready value: local path →
    `data:image/...;base64,...`. URL inputs are not supported —
    download the image first and pass the local path.
@@ -78,8 +97,9 @@ stderr and the process exits non-zero.
 4. If the response status is not 200, raise `RuntimeError` with the
    dashscope `code` and `message`.
 5. Extract every `output.choices[*].message.content[*].image` URL
-   and download each one into `--output-dir` as `1.png`, `2.png`,
-   ...
+   and download each one into `--output-dir` as
+   `<index>_<timestamp>.png` (e.g. `1_20260619-202500.png`). Print
+   each saved path to stdout.
 
 ## Code structure
 
@@ -91,7 +111,7 @@ plus `main`:
 | `_image_value(path)` | local path → `data:image/...;base64,...` string |
 | `_local_image_size(path)` | local png/jpeg → `"<width>*<height>"` |
 | `_extract_urls(response)` | SDK response object → list of URL strings |
-| `dashscope_image(image, prompt, output_dir, model, size, n)` | orchestration: build messages → call SDK → download all URLs |
+| `dashscope_image(image, prompt, output_dir, model, size, n)` | orchestration: build messages → call SDK → download all URLs → print saved paths → return list[Path] |
 | `main()` | argparse → one call to `dashscope_image(...)` → `raise SystemExit(0)` |
 
 No `try`/`except`. Errors from the SDK, file IO, and `urlretrieve`
