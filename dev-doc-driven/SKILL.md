@@ -5,7 +5,7 @@ description: "Document-driven software development: plan, design, and implement 
 
 # dev-doc-driven
 
-Document-first software development workflow. For every non-trivial project, produce a chain of design documents under `project/dev-doc/` **before** writing any code. Each document and each source file is gated by both a sub-agent review and a human review; do not proceed until both pass.
+Document-first software development workflow. For every non-trivial project, produce a chain of design documents under `<project-root>/dev-doc/` **before** writing any code. Each document and each source file is gated by both a sub-agent review and a human review; do not proceed until both pass.
 
 ## When to use
 
@@ -18,7 +18,7 @@ Trigger when the user asks to start, scaffold, plan, or structure a new software
 3. **One module fully done — code + tests — before the next module starts.** The dev plan is the unit of parallelism, not the agent's whim.
 4. **Sub-module recursion is allowed and encouraged.** If a module's design doc would exceed ~500 lines or mix unrelated concerns, drop into a full sub-tree (requirements → architecture → sub-module design → sub-module test design → sub-dev-plan → code) under that module's folder. Same review gates apply at every level.
 5. **Few-shot examples are loaded from `assets/examples/`, not invented.** Read the corresponding example document before drafting. Mirror its structure, depth, and prose style — do not invent a new schema.
-6. **Project directory structure is the agent's responsibility.** At step 1 the agent creates `project/dev-doc/` and the per-module sub-folders. The user does not pre-create them.
+6. **Project directory structure is the agent's responsibility.** At step 1 the agent creates `<project-root>/dev-doc/` and the per-module sub-folders. The user does not pre-create them. The project root itself is whatever directory the owner names as the project root — **never a folder literally named `project/`**.
 7. **Sub-agent review runs in an isolated session.** Use `sessions_spawn` with no `context` (clean child), pass the artifact path + a "review against this example" brief. Do not fork the parent transcript into the reviewer.
 8. **Dev progress is mirrored to memory so an aborted session can resume.** Schema, field semantics, update rules, and resume protocol live in `references/progress-tracking.md`; load that doc when you first start the workflow or when a session resumes.
 
@@ -37,7 +37,7 @@ These terms appear throughout the example documents. Use the long form in user-f
 ## Directory layout
 
 ```
-project/
+<project-root>/
 └── dev-doc/
     ├── 01-requirements.md
     ├── 02-architecture.md
@@ -113,7 +113,7 @@ The hard rule in one sentence: **if the workflow would be confused about where t
 When triggered:
 
 1. Confirm scope with the user — one paragraph of what we're building. Stop if scope is fuzzy.
-2. `mkdir -p project/dev-doc` for the active project.
+2. **Project root = whatever directory the owner names as the project root.** `dev-doc/` sits directly under it (`<project-root>/dev-doc/`). The skill itself may live inside or outside the project root — that is the owner's choice. **Never create a folder literally named `project/`.** Then `mkdir -p <project-root>/dev-doc`.
 3. Load `references/progress-tracking.md`; create the initial progress record in `memory/dev-doc-progress/<project>.md`.
 4. For each step 1–5: read the matching `assets/examples/<n>-<name>.md`, draft the artifact, run review gates, log approval, update the progress record.
 5. Step 6 begins only after step 5 is human-approved. Then module-by-module with the same gates; update the progress record at every transition.
