@@ -8,6 +8,13 @@ Cache-source enum used in signatures below:
 CacheSource = Literal['hf_env', 'hf_default', 'ms_env', 'ms_default', 'cache_dir']
 ```
 
+**Deliberate deviation from 02-architecture.md §3 (2026-07-01T02:56 owner correction, doc fix-up):**
+
+- **Test layout** — 02 §5 places `tests/` at the skill root (`<project-root>/tests/`). This 03 + 04 pair follows that layout (`tests/unit/test_cache_resolver.py`). The previous v1 path `local_image_gen/tests/unit/test_cache_resolver.py` was a doc drift from 02 §5 and was corrected in v1 amend.
+- **`walk_levels()` returns 1–4 levels, not 5** — 02 §3 L141 says "5 levels in walk order", but 02 §3 L142 says "level 5 (`cache_dir`) is appended only if `cache_dir` is supplied" (per-call, inside `resolve()`). 02 is internally inconsistent on this point. This 03 (and 02's "Resolution rules" prose at L142) follow the **per-call L5 inside `resolve()`** interpretation, so `walk_levels()` returns the 1–4 env-resolved levels and `resolve()` appends the `cache_dir` level when supplied. 02 v10 should reconcile L141 with L142.
+- **`CacheLevel.layout` for L5** — set to `'hf'` nominal in code; `_cache_dir_snapshot` actually probes both HF and MS layouts per 02 §3 step 5. The `layout` field is effectively unused for L5; 02 §3 does not constrain it. Tracked as 03 §8 Q3 (alternative: drop the field from L5).
+
+
 ## 1. Scope
 
 What this module does: walk the 5-level cache lookup chain (HF env → HF default → MS env → MS default → caller-supplied `cache_dir`) for a given `model` and return the absolute on-disk snapshot path together with which level won. What it does not: spawn subprocesses, contact vllm-omni, load model weights, map `None` to MCP error codes (that mapping is owned by `mcp_server`).
@@ -19,7 +26,7 @@ Satisfies functional requirement FR-3 (5-level cache lookup chain) from `01-requ
 | Path | Role |
 |------|------|
 | `local_image_gen/cache_resolver.py` | All public functions for this module + the `CacheLevel` dataclass + private snapshot-path helpers |
-| `local_image_gen/tests/unit/test_cache_resolver.py` | One test module per public function, one branch per public branch (not yet written — see 04-test-design) |
+| `tests/unit/test_cache_resolver.py` | One test module per public function, one branch per public branch (not yet written — see 04-test-design) |
 
 ## 3. Public classes / functions
 
@@ -36,20 +43,28 @@ Frozen dataclass representing one slot in the lookup chain.
 - **Constructor signature:** `CacheLevel(name: CacheSource, root: str, layout: Literal['hf', 'ms'], snapshot_for: Callable[[str], Optional[str]])`
 - **Called by:** `walk_levels()` constructs them; `resolve()` consumes them; `mcp_server.list_local_models` consumes them for startup logging (read-only).
 
-### 3.2 `resolve(model: str, cache_dir: Optional[str] = None) -> Optional[Tuple[str, CacheSource]]`
+### 3.2 `resolve(model: str, cache_dir: Optional[str] = None) -> Optional[CacheLevel]`
 
-- **Purpose:** walk the chain in fixed order and return the first hit, or `None` if no level matches.
+- **Purpose:** walk the chain in fixed order and return the first level whose `snapshot_for(model)` is non-`None`. Returns `None` if no level matches. **The caller invokes `level.snapshot_for(model)` itself** to obtain the absolute snapshot path — `resolve` does not pre-resolve the path. This avoids re-running the snapshot lookup in callers that only need the level (e.g. `list_local_models` for diagnostics), and matches `02-architecture.md` §3 spec ("cache_resolver: single responsibility = 5-level chain walk; return the level that wins").
 - **Parameters:**
   - `model` — the HuggingFace-style repo id, e.g. `'Tongyi-MAI/Z-Image-Turbo'`. Must contain exactly one `/`. A model id with zero or multiple `/` yields `None` from every level's `snapshot_for` and therefore `None` overall.
   - `cache_dir` — optional per-call cache directory. When `None`, levels 1–4 only. When supplied, an additional L5 level is appended to the chain inside this function.
-- **Returns:** `(absolute_snapshot_path, cache_source)` where `cache_source` ∈ `CacheSource`. `None` if no level matched.
+- **Returns:** the first `CacheLevel` whose `snapshot_for(model)` is non-`None`, or `None` if no level matched. The caller calls `level.snapshot_for(model)` to get the absolute snapshot path.
 - **Raises / errors:** never. IO is limited to `os.path.isdir` + `os.listdir`; both return safely without raising on missing paths.
 - **Behavior:**
   1. `levels = walk_levels()`. If `cache_dir is not None`, append an L5 `CacheLevel` constructed with `name='cache_dir'`, `root=cache_dir`, `layout='hf'` nominal, and `snapshot_for = functools.partial(_cache_dir_snapshot, cache_dir)` (so the partial takes only `model` and matches the one-arg `Callable[[str], Optional[str]]` shape of the `CacheLevel.snapshot_for` field). The closure performs the L5 auto-probe (HF-then-MS).
-  2. For `level` in `levels`: `snapshot = level.snapshot_for(model)`.
-  3. If `snapshot is not None`: `return (snapshot, level.name)`.
-  4. After all levels: `return None`.
+  2. For `level` in `levels`: `if level.snapshot_for(model) is not None: return level`.
+  3. After all levels: `return None`.
 - **Called by:** `mcp_server.start_service` (canonical use) and `mcp_server.list_local_models` (diagnostics). `mcp_server` maps `None` → `model_not_found` MCP error.
+- **Caller-side snapshot lookup** (illustrative — not in this module):
+
+  ```python
+  # mcp_server.py caller code
+  level = cache_resolver.resolve(model, cache_dir=cache_dir)
+  if level is None:
+      raise ModelNotFoundError(model)
+  snapshot_path = level.snapshot_for(model)   # second call; intentional — same return value as the one inside resolve()
+  ```
 
 ### 3.3 `walk_levels() -> List[CacheLevel]`
 

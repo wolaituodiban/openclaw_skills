@@ -38,85 +38,27 @@ The MCP server is a **stdio-spawned process** whose lifetime is owned by the Ope
 
 | # | Module | One-line purpose | Status |
 |---|--------|------------------|--------|
-| 1 | `local_image_gen.mcp_server` | Long-lived MCP server: exposes the five MCP tools, walks the 5-level cache lookup chain at `start_service` time, spawns / polls / signals / cleans up a vllm-omni subprocess, writes the PID-and-meta file at the fixed path `${STATE_DIR}/service.json`. | new |
-| 2 | `local_image_gen.cache_resolver` | Pure helper module: given `model` (HF-style repo name) and an optional per-call `cache_dir`, walks the 5-level chain and returns `(absolute_snapshot_path, cache_source)`. No I/O outside `os.path.exists` / `os.listdir`; no subprocess, no HTTP. | new |
+| 1 | `local_image_gen.mcp_server` | MCP server assembly + stdio service startup: imports the 5 tool modules below and registers them with FastMCP; runs the stdio transport; on stdin EOF releases the vllm-omni subprocess. Holds no tool logic of its own. | new |
+| 2 | `local_image_gen.list_local_models` | MCP tool module: lists all models visible on disk in the 5-level cache chain with current load status. | new |
+| 3 | `local_image_gen.start_service` | MCP tool module: resolves the model on disk, spawns vllm-omni, polls until ready, writes the PID-and-meta file. | new |
+| 4 | `local_image_gen.list_running_services` | MCP tool module: lists the running vllm-omni service, if any; prunes stale PID files. | new |
+| 5 | `local_image_gen.invoke_model` | MCP tool module: generates or edits an image via the running vllm-omni service, decodes b64 to the requested output format, writes to `filename`. | new |
+| 6 | `local_image_gen.release_service` | MCP tool module: releases the running vllm-omni service. Idempotent on stale entries. | new |
+| 7 | `local_image_gen.cache_resolver` | Pure helper module: given `model` (HF-style repo name) and an optional per-call `cache_dir`, walks the 5-level chain and returns `(absolute_snapshot_path, cache_source)`. No I/O outside `os.path.exists` / `os.listdir`; no subprocess, no HTTP. | new |
 
-This is **two modules, not one (and not the v11 four-module layout, which is gone with `model_server.py`).** `cache_resolver.py` is split out as a pure function to keep the MCP server's tool methods small and to make the chain unit-testable without spawning a subprocess.
+This is **seven modules, not one (and not the v11 four-module layout, which is gone with `model_server.py`).** `cache_resolver.py` is split out as a pure function to make the chain unit-testable without spawning a subprocess; the 5 MCP tools each have their own module so each tool's logic lives in its own file.
 
 ## 3. Per-module public interface
 
 ### 3.1 `local_image_gen.mcp_server`
 
-**Purpose:** expose the five MCP tools over stdio JSON-RPC, walk the 5-level cache lookup chain at `start_service` time, spawn vllm-omni as a subprocess, poll `/v1/models` until ready, track the running service via a single PID-and-meta file, release the subprocess on demand. Holds the global single-service invariant (FR-8).
-
-**HTTP client → vllm-omni:**
-On each `invoke_model` call, the MCP server reads `service.json` to get the current `base_url` (`http://127.0.0.1:<port>/v1`) and `bearer_token`, then creates an `openai.OpenAI` client with these values (sync mode). The client is created per-call (lightweight) and not persisted across calls.
-
-**Routing logic for `invoke_model` (FR-4):**
-- If `invoke_model` receives `image` or `images`, the MCP server converts the local file path(s) to base64 data URLs and posts to `/v1/images/edits` as `multipart/form-data` (POC-confirmed field names: single image → `image: UploadFile`, multi → `image[]: list[UploadFile]`, prompt → `prompt: str`, mask → `mask_image: UploadFile`, reference → `reference_image: UploadFile`).
-- If `invoke_model` receives neither `image` nor `images`, the MCP server posts to `/v1/images/generations` as `application/json`.
-- `filename` is not sent to vllm-omni; the MCP server uses it when persisting the returned base64 data to disk (per the v12.4 contract the disk-write step is **always** executed; only rejection paths return without writing). Caller-supplied is required for v12.4 — there is no auto-naming branch.
-- `timeoutMs` is not sent to vllm-omni; the MCP server converts it to seconds and passes it as the `timeout` argument to `openai.OpenAI(...)` per-call (e.g. `client.images.generate(..., timeout=timeoutMs/1000)`).
-- The MCP server does **not** validate that the running model supports the requested route — that decision is vllm-omni's, and unsupported-shape errors (4xx with OpenAI-shaped `{"error": {...}}` body) are surfaced verbatim. No capability table at the MCP layer.
+**Purpose:** assemble the 5 tool modules and expose them over stdio JSON-RPC via FastMCP. Owns stdio transport, stdin-EOF shutdown, and the vllm-omni subprocess cleanup on gateway exit. Holds no tool logic of its own. The global single-service invariant (FR-8) is enforced by the tool modules collectively (any one of them rejects a second concurrent service).
 
 **Subprocess management:**
 - The MCP server spawns vllm-omni with `subprocess.Popen` using a **fresh shell-less** call. The MCP server builds the command line as a list of strings (no `shell=True`), with **CLI args** (not env vars) for all model-server-specific settings.
 - The MCP server reads vllm-omni's stdout/stderr to its own stderr (unified log capture; stdout is reserved for the MCP JSON-RPC stream per FR-7).
 - The MCP server polls `http://127.0.0.1:<port>/v1/models` every 1 s after bind, with an `Authorization: Bearer <token>` header, until the response body indicates ready or the start timeout elapses. The exact pre-ready vs ready response shape is pending end-to-end POC calibration (see 01-requirements.md §8 Open Questions); vllm-omni 0.22.0 source confirms an omni-aware handler is installed at `/v1/models` (`vllm_omni/entrypoints/openai/api_server.py:452`) and returns 200 with the loaded model card once the diffusion engine reports ready.
 - The MCP server picks the OS-assigned free port via the standard `socket.bind((host, 0)); socket.getsockname()[1]` trick, then **passes `--port <port>` to `vllm serve`**. (vllm-omni 0.22.0 does not accept `--port 0`; the MCP server picks a free port itself before spawning.)
-
-**Interface (MCP tools — exactly five, all `must` priority in FR-1 to FR-5):**
-- `list_local_models() -> [{model, current_load_status}]`
-  - `current_load_status ∈ {not_loaded, loading, loaded}` per FR-1.
-  - v1 supports **any model id vllm-omni can load**; the reference fixture is `Tongyi-MAI/Z-Image-Turbo`. The set of recognized model ids is determined by which models resolve to a snapshot directory in the 5-level cache lookup chain at scan time — there is no hardcoded allow-list in v1. Multi-model discovery from a manifest is deferred to v2 (see 01-requirements.md §8 Open Questions).
-  - `current_load_status` is computed by intersecting the resolved model set with the live PID-and-meta file (single-service invariant ⇒ at most one of `loading` / `loaded`).
-- `start_service(model: str, cache_dir: str | None = None, timeoutMs: int | None = None) -> {model, pid, port, started_at, bearer_token, cache_source, model_path} | {error: {code, message}}`
-  - If a model-service is already running (global single-service, FR-8), fails fast with `service_already_running`; the error message surfaces the existing service's `model` (not a `service_id`, which no longer exists). No subprocess is spawned, no PID-and-meta file is touched.
-  - **5-level cache lookup chain** (FR-3, authoritative resolver = MCP server):
-    1. HuggingFace cache env var (`HF_HOME` or `HUGGINGFACE_HUB_CACHE`), expecting `<hub-root>/models--<org>--<repo>/snapshots/<sha>/`.
-    2. Default HuggingFace cache (`~/.cache/huggingface/hub/`) with the same layout expectation.
-    3. ModelScope cache env var (`MODELSCOPE_CACHE`), expecting `<hub-root>/models/<org>/<repo>/`.
-    4. Default ModelScope cache (`~/.cache/modelscope/hub/`) with the same layout expectation.
-    5. User-supplied `cache_dir` (per-call override) — the resolver probes the directory's contents to choose the layout: if `<cache_dir>/models--<org>--<repo>/snapshots/...` exists, treat as HuggingFace; otherwise if `<cache_dir>/models/<org>/<repo>/` exists, treat as ModelScope.
-    - First match wins. The resolved absolute path is the positional `<model>` argument passed to `vllm serve`. The resolver writes the winning level to `service.json` as `cache_source` (one of `hf_env` | `hf_default` | `ms_env` | `ms_default` | `cache_dir`) — this is the **single source of truth** for which level served the load.
-    - **Modelscope bridging — POC-verified scheme B (2026-06-30T22:00):** vllm-omni 0.22.0 reads the `<model>` positional as a local path and **accepts the standard ModelScope layout (`models/<org>/<repo>/`) as-is**, detecting the diffusers pipeline via `model_index.json` at the root and dispatching the right pipeline class (verified with Z-Image-Turbo: `ZImagePipeline` auto-detected). No bridge / symlink / hardlink / scratch directory layer is required in v1. Schemes A and C are archived only as v2 fallback options.
-  - **vllm-omni subprocess launch** (CLI args, not env vars):
-    - `<absolute_snapshot_path> --omni --port <port> --host 127.0.0.1 --api-key <bearer_token>` plus any additional operator-required flags forwarded from the gateway's MCP server config.
-    - The `--omni` flag is **required** to put vllm in diffusion mode; the flag is hidden from `vllm serve --help=all` but is documented in `vllm_omni/entrypoints/cli/serve.py` and present in `OmniConfig`. Without `--omni`, vllm's `ModelConfig` rejects ModelScope paths because they have `model_index.json` not `config.json` at the root.
-    - The `--api-key` flag is **required** (NFR-5 + FR-3 v12.1); vllm upstream wires it into a FastAPI `AuthenticationMiddleware` that protects every route including `/v1/images/generations` and `/v1/images/edits`. There is no fallback to a loopback-only un-authenticated configuration.
-    - The MCP server passes `--host 127.0.0.1` defensively even though `--api-key` is set (defense in depth — keeps vllm-omni off the LAN if the operator's environment changes).
-  - **Pre-spawn existence check:** the resolver walks the same 5 levels and returns `model_not_found` immediately if none contains the model. This is a fast fail-fast for the obvious "model not on disk" case so the agent sees a clean error without waiting for a subprocess to spawn and fail. The MCP server does **not** make a binding decision about which level will win at this stage — that decision is finalized in the resolution step above (which is the same walk; the pre-check is an early-return when the walk yields nothing).
-  - **Readiness polling:** the MCP server polls `GET /v1/models` with `Authorization: Bearer <token>` every 1 s after bind, until the response indicates ready or the start timeout elapses. The `timeoutMs` argument, when supplied and > 0, overrides the hardcoded default 120 s start timeout for this single call; if omitted, 120 s applies (raised from 30 s in v11 per owner decision 2026-06-30T21:32, to absorb vllm-omni's diffusers-format pipeline warm-up + CUDA graph compile time). On timeout, the subprocess is terminated, no PID-and-meta file is written, and the call returns `start_timeout`.
-  - **PID-and-meta file write:** on success, the MCP server itself (not vllm-omni) writes `${STATE_DIR}/service.json` atomically (`tempfile` + `os.replace`) with `{model, pid, port, started_at, bearer_token, cache_source, model_path}`. The MCP server knows all of these because it is the cache resolver and the subprocess launcher. **`model_path` is the absolute snapshot path that was passed to `vllm serve`** (audit trail).
-- `list_running_services() -> [{model, pid, port, started_at, status}]`
-  - `status ∈ {loading, ready}` per FR-2 / NFR-8.
-  - **v12.1: no `service_id` field.** Returns 0 entries if no service is running (single-service invariant ⇒ at most one entry; in practice the agent will see 0 or 1).
-  - Prunes stale PID-and-meta files before responding (FR-2); uses `kill -0` (or `os.kill(pid, 0)`) to validate PID liveness.
-  - Reads the fixed path `${STATE_DIR}/service.json` (no glob — single-service invariant ⇒ at most one file).
-- `invoke_model(prompt: str, filename: str, model: str | None = None, image: str | None = None, images: list[str] | None = None, size: str | None = None, outputFormat: str = "png", count: int = 1, negative_prompt: str | None = None, num_inference_steps: int | None = None, guidance_scale: float | None = None, true_cfg_scale: float | None = None, seed: int | None = None, timeoutMs: int | None = None) -> {path: str, b64_json: str | list[str], ...} | {error: {code, message}}` — 14 args (v12.4; `prompt` + `filename` are positional-without-default and ordered left-aligned; `path` is always present in the success return).
-  - **Argument semantics** (aligned with OpenClaw's built-in `image_generate`):
-    - `prompt` (required) — image generation / edit prompt. Empty string is a validation error.
-    - `model` (optional) — the desired model's HF-style repo name; **defaults to whichever service is currently running** under v1's single-service invariant. If supplied, the MCP server verifies the running service's `model` field matches and returns `model_not_loaded` on mismatch (no auto-start).
-    - `image` (optional) — single reference image path/URL for edit (img2img / inpainting); sent as the `image` multipart field for `/v1/images/edits` (POC-confirmed field name).
-    - `images` (optional) — list of reference image paths/URLs for edit or style reference; sent as the `image[]` multipart fields for `/v1/images/edits` (POC-confirmed field name; alias `image_array` also accepted).
-    - `filename` (required positional; v12.5 — no default, second positional after `prompt`). Resolution:
-      3. **Parent directory must already exist** on disk. If `Path(filename).parent` does not exist → reject `filename_dir_not_found` (HTTP 400-shaped, no vllm-omni contact). The MCP server never creates parent directories (owner decision 2026-07-01T00:19). If the parent exists but is not writable → `media_dir_unwritable` (HTTP 500-shaped) with the underlying `OSError` errno.
-      4. **Target paths** are computed by splitting `filename` into `<stem>` / `<ext>` via `Path(filename).stem` / `.suffix`. For `count=1` the target is `<filename>`. For `count=N>1` the targets are `<stem>-1.<ext>`, `<stem>-2.<ext>`, …, `<stem>-N.<ext>` (no zero-padding). All targets are checked against disk before vllm-omni is contacted; any existing target → `filename_conflict` (HTTP 400-shaped).
-    - `size` (optional) — `WxH` literal matching vllm-omni's wire protocol, e.g. `"1024x1024"`, `"1152x896"`, `"1280x720"`. The MCP server does **not** pre-validate the value — the specific valid set depends on the running model and vllm-omni returns 4xx for unsupported sizes. For Z-Image-Turbo the canonical default is `"1024x1024"`.
-    - `outputFormat` (optional, default `"png"`) — `"png"` | `"jpeg"` | `"webp"`. vllm-omni's `/v1/images/generations` only supports `response_format: b64_json` regardless of `outputFormat`; the `outputFormat` value controls the **decoded bytes** format returned to the caller. `/v1/images/edits` has a native `output_format` parameter; the MCP server forwards the same value there.
-    - `count` (optional, default 1) — image count 1-N (exact N TBD at module-design time). Under v1 single-service invariant, multiple images are produced serially by the same service and returned together in a single response. The response shape is `{path: list[str] (len=count), b64_json: list[str] (len=count)}` when `count>1`, and `{path: str, b64_json: str}` when `count=1`. **v12.5 contract for `count>1` + caller-supplied `filename`:** the targets are `<stem>-1.<ext>` … `<stem>-N.<ext>` (see `filename` rule 4);
-    - **`negative_prompt`** (optional, default `None`) — text describing what to avoid in the image. Forwarded verbatim to vllm-omni as the `negative_prompt` field on both `/v1/images/generations` (JSON body) and `/v1/images/edits` (multipart). Source-of-truth field name and default come from the [vllm-omni `image_generation_api` page](https://docs.vllm.ai/projects/vllm-omni/en/stable/serving/image_generation_api/) "vllm-omni Extension Parameters" table (web_fetch 2026-06-30T23:17); the same field exists on the [`image_edit_api` page](https://docs.vllm.ai/projects/vllm-omni/en/stable/serving/image_edit_api/) for the edits endpoint. Type: string. When `None`, the field is omitted and the model uses its own default.
-    - **`num_inference_steps`** (optional, default `None`) — number of diffusion steps. Forwarded verbatim as `num_inference_steps` on both endpoints (JSON body key on `generations`, multipart field on `edits`). Type: integer. When `None`, the field is omitted and the model uses its own default.
-    - **`guidance_scale`** (optional, default `None`) — classifier-free guidance scale; typical range documented as `0.0–20.0`, but the MCP server does **not** enforce that range — the value is forwarded as-supplied and any range / type error surfaces verbatim from vllm-omni. Forwarded as `guidance_scale` on both endpoints. Type: float. When `None`, the field is omitted and the model uses its own default.
-    - **`true_cfg_scale`** (optional, default `None`) — True CFG scale. **Model-specific** — vllm-omni documents this as "may be ignored if not supported". Forwarded verbatim as `true_cfg_scale` on both endpoints. Type: float. When `None`, the field is omitted and the model uses its own default.
-    - **`seed`** (optional, default `None`) — random seed for reproducibility. Forwarded verbatim as `seed` on both endpoints. Type: integer. When `None`, the field is omitted and the model uses its own default. (Differs from the OpenClaw built-in `image_generate` tool, which does not expose `seed`; this skill surfaces it because vllm-omni supports it at the wire layer.)
-  - **Lookup mechanism:** the MCP server reads `${STATE_DIR}/service.json`, validates PID liveness with `kill -0`, and returns a `no_running_service` error if absent or dead. If alive, the MCP server verifies its `model` field matches the supplied `model` argument (or matches anything if `model` was omitted); mismatch returns `model_not_loaded`. On match, the MCP server reads `bearer_token`, `port`, and other fields from the file and forwards the request to `http://127.0.0.1:<port>/v1/images/{generations|edits}` with the `Authorization: Bearer <token>` header.
-  - Forwards `Authorization: Bearer <token>` to vllm-omni using the bearer token from `service.json`. Hardcoded 120 s invoke timeout (per-call override via `timeoutMs`).
-  - Returns `{path: str, b64_json: str | list[str], ...}` (the `path` is **always** present per the v12.3 file-persistence contract; `b64_json` is a single string for `count=1` and a list for `count>1`) alongside any vllm-omni usage metadata. The file at `path` is the decoded bytes (decoded into the requested `outputFormat` on top of the b64-json bytes vllm-omni returned).
-- `release_service(model: str) -> {released: bool, model, pid, port} | {error: {code, message}}`
-  - **Lookup mechanism:** the MCP server reads `${STATE_DIR}/service.json`, prunes it if PID is not alive (idempotent release of a stale record), and returns `no_running_service` if absent. If present, verifies its `model` field matches the argument; mismatch returns `model_not_loaded`.
-  - On match: the MCP server sends `SIGTERM` to the vllm-omni PID, waits up to the hardcoded 10 s release-grace timeout for graceful shutdown, then `SIGKILL` if still alive. The PID-and-meta file is removed before responding. If the process is already dead, the stale file is removed and the call returns success (idempotent).
-  - Response shape: `{released: true, model, pid, port}` — no `service_id` field.
 
 **Interface (process boundary):**
 - **Env vars** read on startup (only two skill-specific, per owner decision 2026-06-28 23:39 + 2026-06-29 00:13):
@@ -129,7 +71,148 @@ On each `invoke_model` call, the MCP server reads `service.json` to get the curr
 
 **Dependencies on other modules:** `local_image_gen.cache_resolver` (the 5-level chain walker). Talks to vllm-omni over HTTP using the **`openai.OpenAI` client** (sync mode). The client is configured with `base_url=http://127.0.0.1:<port>/v1` and `api_key=<bearer-token-read-from-service.json>`. vllm-omni's OpenAI-compatible HTTP endpoint (FR-6) is the wire format, so using the official `openai` Python client avoids hand-rolled HTTP plumbing (base_url / auth header / retry / timeout). For `/v1/images/edits` the MCP server needs to construct the multipart body itself (the `openai` Python client's `images.edit` helper supports multipart, but the vllm-omni-specific field names `image` / `image[]` are passed via `extra_body` or directly via `httpx` if the official client doesn't expose them; see §6 Tech Stack for the final decision). (`httpx` is a transitive dependency of the `openai` package — the MCP server does not import it directly unless the multipart path needs it.)
 
-### 3.2 `local_image_gen.cache_resolver`
+### 3.2 `local_image_gen.list_local_models`
+
+**Purpose:** MCP tool module exposing the `list_local_models` tool. Walks the 5-level cache chain at scan time (read-only) and intersects the resolved model set with the live PID-and-meta file to compute `current_load_status` for each entry.
+
+**Interface:**
+- `list_local_models() -> list[dict]`
+  - Each entry: `{"model": str, "current_load_status": "not_loaded" | "loading" | "loaded"}`.
+  - Empty list if no model resolves in any of the 5 levels.
+  - At most one entry has status `loading` or `loaded` (single-service invariant, FR-8).
+  - No subprocess, no HTTP, no model loading. Delegates the 5-level walk to `local_image_gen.cache_resolver`.
+
+**Errors:** none.
+
+### 3.3 `local_image_gen.start_service`
+
+**Purpose:** MCP tool module exposing the `start_service` tool. Resolves the model on disk (5-level chain via `cache_resolver`), spawns vllm-omni as a subprocess, polls `/v1/models` until ready, and writes the PID-and-meta file on success. Owns subprocess launch + readiness polling.
+
+**Interface:**
+- `start_service(model: str, cache_dir: str | None = None, timeoutMs: int | None = None) -> dict`
+  - Success: `{"model": str, "pid": int, "port": int, "started_at": float, "bearer_token": str, "cache_source": "hf_env" | "hf_default" | "ms_env" | "ms_default" | "cache_dir", "model_path": str}`.
+  - Error: `{"error": {"code": str, "message": str}}`.
+  - `model` (required) — HF-style repo name, e.g. `"Tongyi-MAI/Z-Image-Turbo"`.
+  - `cache_dir` (optional) — per-call cache root override. The resolver probes the directory for HF or ModelScope layout.
+  - `timeoutMs` (optional) — start timeout in ms. If omitted, 120000 applies.
+
+**Behavior:**
+- If a model-service is already running (single-service invariant, FR-8), fails fast with `service_already_running`; the error message surfaces the existing service's `model`. No subprocess is spawned, no PID-and-meta file is touched.
+- **5-level cache lookup chain** (delegated to `local_image_gen.cache_resolver.resolve`):
+  1. HuggingFace cache env var (`HF_HOME` or `HUGGINGFACE_HUB_CACHE`), expecting `<hub-root>/models--<org>--<repo>/snapshots/<sha>/`.
+  2. Default HuggingFace cache (`~/.cache/huggingface/hub/`) with the same layout expectation.
+  3. ModelScope cache env var (`MODELSCOPE_CACHE`), expecting `<hub-root>/models/<org>/<repo>/`.
+  4. Default ModelScope cache (`~/.cache/modelscope/hub/`) with the same layout expectation.
+  5. User-supplied `cache_dir` (per-call override) — the resolver probes the directory's contents to choose the layout: if `<cache_dir>/models--<org>--<repo>/snapshots/...` exists, treat as HuggingFace; otherwise if `<cache_dir>/models/<org>/<repo>/` exists, treat as ModelScope.
+  - First match wins. The resolved absolute path is the positional `<model>` argument passed to `vllm serve`. The resolver writes the winning level to `service.json` as `cache_source` — this is the **single source of truth** for which level served the load.
+  - **ModelScope bridging — POC-verified scheme B (2026-06-30T22:00):** vllm-omni 0.22.0 reads the `<model>` positional as a local path and **accepts the standard ModelScope layout (`models/<org>/<repo>/`) as-is**, detecting the diffusers pipeline via `model_index.json` at the root and dispatching the right pipeline class (verified with Z-Image-Turbo: `ZImagePipeline` auto-detected). No bridge / symlink / hardlink / scratch directory layer is required in v1.
+- **Pre-spawn existence check:** if `cache_resolver.resolve` returns `None`, return `model_not_found` immediately (no subprocess spawned).
+- **vllm-omni subprocess launch** (CLI args, not env vars):
+  - `<absolute_snapshot_path> --omni --port <port> --host 127.0.0.1 --api-key <bearer_token>` plus any additional operator-required flags forwarded from the gateway's MCP server config.
+  - The `--omni` flag is **required** to put vllm in diffusion mode. Without `--omni`, vllm's `ModelConfig` rejects ModelScope paths because they have `model_index.json` not `config.json` at the root.
+  - The `--api-key` flag is **required** (NFR-5 + FR-3 v12.1); vllm upstream wires it into a FastAPI `AuthenticationMiddleware` that protects every route.
+  - `--host 127.0.0.1` is set defensively (keeps vllm-omni off the LAN even if the operator's environment changes).
+  - The free port is picked by the tool before spawning via the standard `socket.bind((host, 0)); socket.getsockname()[1]` trick (vllm-omni 0.22.0 does not accept `--port 0`).
+  - Subprocess is spawned with `subprocess.Popen` (no `shell=True`); vllm-omni's stdout/stderr are redirected to the tool's own stderr.
+- **Readiness polling:** polls `GET http://127.0.0.1:<port>/v1/models` with `Authorization: Bearer <token>` every 1 s after bind, until the response indicates ready or the start timeout elapses. The `timeoutMs` argument, when supplied and > 0, overrides the hardcoded 120 s default for this single call; if omitted, 120 s applies (raised from 30 s in v11 per owner decision 2026-06-30T21:32). On timeout, the subprocess is terminated, no PID-and-meta file is written, and the call returns `start_timeout`.
+- **PID-and-meta file write:** on success, writes `${STATE_DIR}/service.json` atomically (`tempfile` + `os.replace`) with `{model, pid, port, started_at, bearer_token, cache_source, model_path}`. `model_path` is the absolute snapshot path that was passed to `vllm serve` (audit trail).
+
+**Error codes:**
+- `model_not_found` — none of the 5 levels contains the model.
+- `service_already_running` — a service is already running; message surfaces the existing service's `model`.
+- `start_timeout` — vllm-omni did not become ready within `timeoutMs` (subprocess is killed, no state file written).
+- `subprocess_launch_failed` — `subprocess.Popen` raised (e.g. `vllm` not on PATH).
+
+**Dependencies on other modules:** `local_image_gen.cache_resolver`. Talks to vllm-omni over HTTP for the readiness probe only.
+
+### 3.4 `local_image_gen.list_running_services`
+
+**Purpose:** MCP tool module exposing the `list_running_services` tool. Reads `${STATE_DIR}/service.json`, validates PID liveness with `os.kill(pid, 0)`, prunes stale entries, returns the surviving record.
+
+**Interface:**
+- `list_running_services() -> list[dict]`
+  - 0 or 1 entries, each `{"model": str, "pid": int, "port": int, "started_at": float, "status": "loading" | "ready"}`.
+  - Empty list if no service is running (or after a stale entry is pruned).
+  - `status` is read from the PID-and-meta file's `status` field, which the spawn-and-poll loop in `local_image_gen.start_service` updates from `loading` to `ready` on first successful `/v1/models` response.
+
+**Errors:** none.
+
+**Dependencies on other modules:** none.
+
+### 3.5 `local_image_gen.invoke_model`
+
+**Purpose:** MCP tool module exposing the `invoke_model` tool. Reads `${STATE_DIR}/service.json`, validates PID liveness, routes the request to `/v1/images/{generations|edits}` over HTTP, decodes the returned b64 to the requested output format, writes to `filename`. Owns image generation / edit dispatch and disk persistence.
+
+**Interface:**
+- `invoke_model(prompt: str, filename: str, model: str | None = None, image: str | None = None, images: list[str] | None = None, size: str | None = None, outputFormat: str = "png", count: int = 1, negative_prompt: str | None = None, num_inference_steps: int | None = None, guidance_scale: float | None = None, true_cfg_scale: float | None = None, seed: int | None = None, timeoutMs: int | None = None) -> dict`
+  - Success (`count=1`): `{"path": str, "b64_json": str, ...}`.
+  - Success (`count>1`): `{"path": list[str] (len=count), "b64_json": list[str] (len=count), ...}`.
+  - Error: `{"error": {"code": str, "message": str}}`.
+  - `path` is **always** present in the success return (v12.3 file-persistence contract).
+
+**Argument semantics** (aligned with OpenClaw's built-in `image_generate`):
+- `prompt` (required) — image generation / edit prompt. Empty string is a validation error.
+- `model` (optional) — the desired model's HF-style repo name; **defaults to whichever service is currently running** under v1's single-service invariant. If supplied, the tool verifies the running service's `model` field matches and returns `model_not_loaded` on mismatch (no auto-start).
+- `image` (optional) — single reference image path/URL for edit (img2img / inpainting); sent as the `image` multipart field for `/v1/images/edits` (POC-confirmed field name).
+- `images` (optional) — list of reference image paths/URLs for edit or style reference; sent as the `image[]` multipart fields for `/v1/images/edits` (POC-confirmed field name; alias `image_array` also accepted).
+- `filename` (required positional; v12.5 — no default, second positional after `prompt`). Resolution:
+  - **Parent directory must already exist** on disk. If `Path(filename).parent` does not exist → reject `filename_dir_not_found` (HTTP 400-shaped, no vllm-omni contact). The tool never creates parent directories (owner decision 2026-07-01T00:19). If the parent exists but is not writable → `media_dir_unwritable` (HTTP 500-shaped) with the underlying `OSError` errno.
+  - **Target paths** are computed by splitting `filename` into `<stem>` / `<ext>` via `Path(filename).stem` / `.suffix`. For `count=1` the target is `<filename>`. For `count=N>1` the targets are `<stem>-1.<ext>`, `<stem>-2.<ext>`, …, `<stem>-N.<ext>` (no zero-padding). All targets are checked against disk before vllm-omni is contacted; any existing target → `filename_conflict` (HTTP 400-shaped).
+- `size` (optional) — `WxH` literal matching vllm-omni's wire protocol, e.g. `"1024x1024"`, `"1152x896"`, `"1280x720"`. The tool does **not** pre-validate the value — the specific valid set depends on the running model and vllm-omni returns 4xx for unsupported sizes. For Z-Image-Turbo the canonical default is `"1024x1024"`.
+- `outputFormat` (optional, default `"png"`) — `"png"` | `"jpeg"` | `"webp"`. vllm-omni's `/v1/images/generations` only supports `response_format: b64_json` regardless of `outputFormat`; the `outputFormat` value controls the **decoded bytes** format returned to the caller. `/v1/images/edits` has a native `output_format` parameter; the tool forwards the same value there.
+- `count` (optional, default 1) — image count 1-N. Under v1 single-service invariant, multiple images are produced serially by the same service and returned together in a single response. Response shape is `{path: list[str] (len=count), b64_json: list[str] (len=count)}` when `count>1`, and `{path: str, b64_json: str}` when `count=1`.
+- `negative_prompt` (optional, default `None`) — text describing what to avoid in the image. Forwarded verbatim to vllm-omni as the `negative_prompt` field on both endpoints. Type: string. When `None`, the field is omitted and the model uses its own default.
+- `num_inference_steps` (optional, default `None`) — number of diffusion steps. Forwarded verbatim as `num_inference_steps` on both endpoints. Type: integer. When `None`, the field is omitted and the model uses its own default.
+- `guidance_scale` (optional, default `None`) — classifier-free guidance scale; typical range documented as `0.0–20.0`, but the tool does **not** enforce that range. Forwarded as `guidance_scale` on both endpoints. Type: float. When `None`, the field is omitted and the model uses its own default.
+- `true_cfg_scale` (optional, default `None`) — True CFG scale. **Model-specific** — vllm-omni documents this as "may be ignored if not supported". Forwarded verbatim as `true_cfg_scale` on both endpoints. Type: float. When `None`, the field is omitted and the model uses its own default.
+- `seed` (optional, default `None`) — random seed for reproducibility. Forwarded verbatim as `seed` on both endpoints. Type: integer. When `None`, the field is omitted and the model uses its own default.
+
+**Lookup mechanism:** reads `${STATE_DIR}/service.json`, validates PID liveness with `os.kill(pid, 0)`, and returns a `no_running_service` error if absent or dead. If alive, verifies its `model` field matches the supplied `model` argument (or matches anything if `model` was omitted); mismatch returns `model_not_loaded`. On match, reads `bearer_token`, `port`, and other fields from the file and forwards the request to `http://127.0.0.1:<port>/v1/images/{generations|edits}` with the `Authorization: Bearer <token>` header.
+
+**Routing logic (FR-4):**
+- If `invoke_model` receives `image` or `images`, converts the local file path(s) to base64 data URLs and posts to `/v1/images/edits` as `multipart/form-data` (POC-confirmed field names: single image → `image: UploadFile`, multi → `image[]: list[UploadFile]`, prompt → `prompt: str`, mask → `mask_image: UploadFile`, reference → `reference_image: UploadFile`).
+- If `invoke_model` receives neither `image` nor `images`, posts to `/v1/images/generations` as `application/json`.
+- `filename` is not sent to vllm-omni; the tool uses it when persisting the returned base64 data to disk.
+- `timeoutMs` is not sent to vllm-omni; the tool converts it to seconds and passes it as the `timeout` argument to `openai.OpenAI(...)` per-call.
+- The tool does **not** validate that the running model supports the requested route — that decision is vllm-omni's, and unsupported-shape errors (4xx with OpenAI-shaped `{"error": {...}}` body) are surfaced verbatim.
+
+**HTTP client → vllm-omni:** creates an `openai.OpenAI` client per-call (sync mode) with `base_url=http://127.0.0.1:<port>/v1` and `api_key=<bearer-token-read-from-service.json>`. The client is lightweight and not persisted across calls.
+
+**Error codes:**
+- `validation_error` — `prompt` is empty.
+- `no_running_service` — no service is running (or the PID is dead; the stale entry is pruned in-place).
+- `model_not_loaded` — supplied `model` does not match the running service.
+- `filename_dir_not_found` — parent directory of `filename` does not exist.
+- `filename_conflict` — one or more target paths already exist.
+- `media_dir_unwritable` — parent directory exists but is not writable.
+- `vllm_error` — vllm-omni returned 4xx/5xx (error body is surfaced verbatim).
+
+**Dependencies on other modules:** none (talks to vllm-omni over HTTP; reads its own connection details from the state file).
+
+### 3.6 `local_image_gen.release_service`
+
+**Purpose:** MCP tool module exposing the `release_service` tool. Reads `${STATE_DIR}/service.json`, prunes it if PID is not alive (idempotent release of a stale record), and on match sends SIGTERM to vllm-omni (SIGKILL after the 10 s grace), removes the PID-and-meta file.
+
+**Interface:**
+- `release_service(model: str) -> dict`
+  - Success: `{"released": True, "model": str, "pid": int, "port": int}`.
+  - Error: `{"error": {"code": str, "message": str}}`.
+
+**Argument semantics:**
+- `model` (required) — HF-style repo name. Must match the running service's `model`; mismatch → `model_not_loaded`.
+
+**Behavior:**
+- Reads `${STATE_DIR}/service.json`. If PID is not alive, prunes the file and returns `no_running_service` (idempotent release of a stale record).
+- If present, verifies its `model` field matches the argument; mismatch returns `model_not_loaded`.
+- On match: sends `SIGTERM` to the vllm-omni PID, waits up to the hardcoded 10 s release-grace timeout for graceful shutdown, then `SIGKILL` if still alive. The PID-and-meta file is removed before responding. If the process is already dead, the stale file is removed and the call returns success (idempotent).
+
+**Error codes:**
+- `no_running_service` — no service is running (or stale entry was just pruned).
+- `model_not_loaded` — supplied `model` does not match the running service.
+
+**Dependencies on other modules:** none (talks to vllm-omni over signal; reads/writes the state file directly).
+
+### 3.7 `local_image_gen.cache_resolver`
 
 **Purpose:** pure function that walks the 5-level cache lookup chain for a given `model` and returns `(absolute_snapshot_path, cache_source)`. No subprocess, no HTTP, no model loading. No state beyond the chain arguments.
 
@@ -168,8 +251,13 @@ Project root is `~/.openclaw/skills/local-image-gen/` (owner-decided). Layout us
 ├── .env.example                           [NEW] — sample env vars with comments (3 only: BEARER_TOKEN, STATE_DIR, plus a comment about inheriting HF/MODELSCOPE env vars)
 ├── local_image_gen/
 │   ├── __init__.py                        [NEW] — package marker, __version__
-│   ├── mcp_server.py                      [NEW] — module 1 (FastMCP server, stdio transport, subprocess lifecycle, bearer-token handoff)
-│   └── cache_resolver.py                  [NEW] — module 2 (pure 5-level chain walker)
+│   ├── mcp_server.py                      [NEW] — module 1 (FastMCP assembly + stdio transport; imports 5 tool modules)
+│   ├── list_local_models.py               [NEW] — module 2 (MCP tool: list models on disk)
+│   ├── start_service.py                   [NEW] — module 3 (MCP tool: spawn vllm-omni)
+│   ├── list_running_services.py           [NEW] — module 4 (MCP tool: list running service)
+│   ├── invoke_model.py                    [NEW] — module 5 (MCP tool: generate / edit image)
+│   ├── release_service.py                 [NEW] — module 6 (MCP tool: release vllm-omni)
+│   └── cache_resolver.py                  [NEW] — module 7 (pure 5-level chain walker)
 └── tests/
     ├── unit/
     │   ├── test_mcp_server.py             [NEW] — MCP server tool tests, single-service invariant, stdio JSON-RPC framing

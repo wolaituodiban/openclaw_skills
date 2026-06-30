@@ -13,6 +13,9 @@ Paired 1:1 with `03-design.md`. Mirrors the structure of `assets/examples/04-tes
 - `_MockPopenMixin` is hoisted out of any individual test file into `unit/mcp_server/_mixins.py` so the 5 public-function test files can share it. Internal-helper test files (§4.1–§4.11) do not use the mixin.
 - Test class / test name / test count per public function and per helper are **unchanged from v2**; v3 is a layout-only amend. (R2 had reported one outstanding R1 v0 MAJOR: §3.3 `list_running_services` Edge bucket has 2 tests where ≥3 is required. That MAJOR is **not** fixed in v3 — owner direction was to restructure first, address the bucket-size gap in a follow-up amend.)
 
+*v4 amend, 2026-07-01T03:11, deferred MAJOR resolution:*
+- §3.3 Edge bucket raised from 2 to 3 tests via `test_list_running_services_returns_loading_status_when_poll_pending`. New test covers the `status ∈ {"loading", "ready"}` enum from 03 §3.3 — the cold-cache→ready default only applies when the cache is genuinely cold; an explicit non-ready value (`"loading"`) must pass through unchanged. **No spec-content change.** Total test count: §3.1=14, §3.2=20, §3.3=10 → 11, §3.4=30, §3.5=11, §4.1–§4.11=45 → **131** (+1). All other sections unchanged.
+
 ## 1. Scope
 
 Tests cover every public tool function (5) and every internal helper (11) of `local_image_gen.mcp_server`. Subprocess management (`subprocess.Popen`) and HTTP calls (vllm-omni over HTTP via `openai.OpenAI` sync client) are mocked via `unittest.mock.patch` and `unittest.mock.MagicMock` / `AsyncMock`. The `cache_resolver` module is mocked at its import boundary via `unittest.mock.patch`. Stdlib functions (asyncio, base64, json, os, pathlib, secrets, socket, subprocess, sys, tempfile, time) are **not** mocked — they are exercised against the actual Python runtime.
@@ -28,16 +31,16 @@ What this design does **not** cover:
 Per v3 owner direction, the unit test surface for this module is split **per function under test** and lives under `tests/unit/mcp_server/` (so it can be discovered independently of any other unit-test packages added to the skill later, e.g. `tests/unit/cache_resolver/`). The integration test remains a single file at `tests/integration/test_mcp_server.py`. `unit/mcp_server/` also hosts a shared `_mixins.py` for cross-file test scaffolding.
 
 ```
-local_image_gen/tests/
+tests/
 ├── unit/
 │   └── mcp_server/                          ← this design's unit tests
 │       ├── _mixins.py                       ← shared test scaffolding (MockPopen + helpers)
 │       ├── test_list_local_models.py        ← §3.1 (14 tests, class TestListLocalModels)
 │       ├── test_start_service.py            ← §3.2 (20 tests, class TestStartService)
-│       ├── test_list_running_services.py    ← §3.3 (10 tests, class TestListRunningServices)
+│       ├── test_list_running_services.py    ← §3.3 (11 tests, class TestListRunningServices)
 │       ├── test_invoke_model.py             ← §3.4 (30 tests, class TestInvokeModel)
 │       ├── test_release_service.py          ← §3.5 (11 tests, class TestReleaseService)
-│       └── test_helpers.py                  ← §4.1–§4.11 (43 tests, 11 classes)
+│       └── test_helpers.py                  ← §4.1–§4.11 (45 tests, 11 classes)
 └── integration/
     └── test_mcp_server.py                   ← stdio JSON-RPC end-to-end (separate design)
 ```
@@ -55,10 +58,10 @@ local_image_gen/tests/
 | `unit/mcp_server/_mixins.py` | `class _MockPopenMixin` | (scaffolding) | Provides a `setUp` helper that builds a `MockPopen` configured with the per-test pid, exit code, and poll/wait behavior. Reused by all 5 public-function test files. |
 | `unit/mcp_server/test_list_local_models.py` | `class TestListLocalModels(_MockPopenMixin, unittest.TestCase)` | 14 (§3.1) | Sync tests. |
 | `unit/mcp_server/test_start_service.py` | `class TestStartService(_MockPopenMixin, unittest.IsolatedAsyncioTestCase)` | 20 (§3.2) | Async tests. |
-| `unit/mcp_server/test_list_running_services.py` | `class TestListRunningServices(_MockPopenMixin, unittest.TestCase)` | 10 (§3.3) | Sync tests. |
+| `unit/mcp_server/test_list_running_services.py` | `class TestListRunningServices(_MockPopenMixin, unittest.TestCase)` | 11 (§3.3) | Sync tests. |
 | `unit/mcp_server/test_invoke_model.py` | `class TestInvokeModel(_MockPopenMixin, unittest.IsolatedAsyncioTestCase)` | 30 (§3.4) | Async tests. |
 | `unit/mcp_server/test_release_service.py` | `class TestReleaseService(_MockPopenMixin, unittest.TestCase)` | 11 (§3.5) | Sync tests. |
-| `unit/mcp_server/test_helpers.py` | `class TestValidateStateDir(unittest.TestCase)` (5) + `class TestPickFreePort(unittest.TestCase)` (4) + `class TestSpawnVllmOmni(unittest.TestCase)` (4) + `class TestPollReady(unittest.TestCase)` (4) + `class TestReadServiceJson(unittest.TestCase)` (4) + `class TestWriteServiceJson(unittest.TestCase)` (4) + `class TestPruneStaleServiceJson(unittest.TestCase)` (4) + `class TestReleaseSubprocess(unittest.TestCase)` (3) + `class TestRouteInvoke(unittest.TestCase)` (5) + `class TestBuildEditMultipart(unittest.TestCase)` (3) + `class TestDecodeAndPersist(unittest.TestCase)` (5) | 43 (§4.1–§4.11) | Sync tests, no Popen mixin. |
+| `unit/mcp_server/test_helpers.py` | `class TestValidateStateDir(unittest.TestCase)` (5) + `class TestPickFreePort(unittest.TestCase)` (4) + `class TestSpawnVllmOmni(unittest.TestCase)` (4) + `class TestPollReady(unittest.TestCase)` (4) + `class TestReadServiceJson(unittest.TestCase)` (4) + `class TestWriteServiceJson(unittest.TestCase)` (4) + `class TestPruneStaleServiceJson(unittest.TestCase)` (4) + `class TestReleaseSubprocess(unittest.TestCase)` (3) + `class TestRouteInvoke(unittest.TestCase)` (5) + `class TestBuildEditMultipart(unittest.TestCase)` (3) + `class TestDecodeAndPersist(unittest.TestCase)` (5) | 45 (§4.1–§4.11) | Sync tests, no Popen mixin. |
 
 **Cross-file test class reuse:** all 5 public-function test classes inherit from `_MockPopenMixin` (`from ._mixins import _MockPopenMixin` at the top of each file). The 11 internal-helper test classes do not.
 
@@ -150,6 +153,7 @@ Temp files: each test file's `setUp` uses `with tempfile.TemporaryDirectory() as
 
 - `test_list_running_services_cold_cache_status_defaults_to_ready` — `service.json` exists, PID alive, in-memory readiness cache cold (the file does not store `status`). Asserts `status == "ready"` (the file was written only after polling succeeded).
 - `test_list_running_services_handles_in_memory_status_cache_present` — after a `start_service` call that has just succeeded, an in-memory readiness cache holds `status: "ready"`. Asserts `list_running_services` reads the in-memory cache and returns `status: "ready"` (does not poll `/v1/models` again). (This tests the "cache populated by `start_service`, consumed by `list_running_services`" flow that 03 §5 describes.)
+- `test_list_running_services_returns_loading_status_when_poll_pending` — `service.json` exists, PID alive, in-memory readiness cache holds `status: "loading"` (mid-poll, after `start_service` wrote `service.json` but before the `/v1/models` poll returned 200). Asserts the returned entry's `status == "loading"` (not `"ready"`). This covers the `status ∈ {"loading", "ready"}` enum from 03 §3.3 — the cold-cache→ready default only applies when the cache is genuinely cold, not when it has an explicit non-ready value.
 
 ### 3.4 `invoke_model(prompt, filename, model=None, image=None, images=None, size=None, outputFormat="png", count=1, negative_prompt=None, num_inference_steps=None, guidance_scale=None, true_cfg_scale=None, seed=None, timeoutMs=None) -> dict` → `unit/mcp_server/test_invoke_model.py`
 

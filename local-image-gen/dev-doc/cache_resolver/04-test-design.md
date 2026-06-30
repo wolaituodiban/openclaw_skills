@@ -18,12 +18,13 @@ Satisfies functional requirement FR-3 (5-level cache lookup chain) from `01-requ
 
 ```
 local_image_gen/
-├── cache_resolver.py
-└── tests/
-    ├── unit/
-    │   └── test_cache_resolver.py    ← all cases for this module
-    └── integration/
-        └── (none — cache_resolver is a leaf module per 02-architecture.md §3.2)
+└── cache_resolver.py
+
+tests/
+├── unit/
+│   └── test_cache_resolver.py    ← all cases for this module
+└── integration/
+    └── (none — cache_resolver is a leaf module per 02-architecture.md §3.2)
 ```
 
 `test_cache_resolver.py` uses `tmp_path` (pytest built-in fixture) and `monkeypatch.setenv` to control env vars. No real cache directories are touched. No model weights are loaded.
@@ -45,34 +46,36 @@ local_image_gen/
 
 ### 3.2 `resolve`
 
+> **Return type changed in v3 amend (2026-07-01T03:07 owner correction).** `resolve` now returns `Optional[CacheLevel]`, not `Optional[Tuple[str, CacheSource]]`. The caller invokes `level.snapshot_for(model)` to obtain the absolute snapshot path. All hit assertions therefore check `result.name` and the returned level's `snapshot_for` separately; no tuple unpacking.
+
 **Happy path — L1 hit**
-- `test_resolve_hits_l1_hf_env` — `HF_HOME=<tmp>/hf` set, `<tmp>/hf/hub/models--Tongyi-MAI--Z-Image-Turbo/snapshots/abc123/` exists. `resolve('Tongyi-MAI/Z-Image-Turbo')` returns `(<abs path>, 'hf_env')`.
+- `test_resolve_hits_l1_hf_env` — `HF_HOME=<tmp>/hf` set, `<tmp>/hf/hub/models--Tongyi-MAI--Z-Image-Turbo/snapshots/abc123/` exists. `result = resolve('Tongyi-MAI/Z-Image-Turbo')`. Assert `result is not None`, `result.name == 'hf_env'`, `result.snapshot_for('Tongyi-MAI/Z-Image-Turbo') == <abs path>`.
 
 **Happy path — L2 hit (L1 miss)**
-- `test_resolve_hits_l2_hf_default_when_no_env` — `HF_HOME` unset, `<tmp_default>/models--Tongyi-MAI--Z-Image-Turbo/snapshots/abc123/` exists (set `HOME` to a tmp dir so `HF_DEFAULT_ROOT` resolves to it). `resolve('Tongyi-MAI/Z-Image-Turbo')` returns `(<abs path>, 'hf_default')`.
+- `test_resolve_hits_l2_hf_default_when_no_env` — `HF_HOME` unset, `<tmp_default>/models--Tongyi-MAI--Z-Image-Turbo/snapshots/abc123/` exists. `result = resolve(...)`. Assert `result.name == 'hf_default'` and `result.snapshot_for(...) == <abs path>`.
 
 **Happy path — L3 hit (L1 + L2 miss)**
-- `test_resolve_hits_l3_ms_env` — `MODELSCOPE_CACHE=<tmp>/ms` set, `<tmp>/ms/models/Tongyi-MAI/Z-Image-Turbo/` exists. `resolve('Tongyi-MAI/Z-Image-Turbo')` returns `(<abs path>, 'ms_env')`.
+- `test_resolve_hits_l3_ms_env` — `MODELSCOPE_CACHE=<tmp>/ms` set, `<tmp>/ms/models/Tongyi-MAI/Z-Image-Turbo/` exists. Assert `result.name == 'ms_env'`, `result.snapshot_for(...) == <abs path>`.
 
 **Happy path — L4 hit (L1-L3 miss)**
-- `test_resolve_hits_l4_ms_default_when_no_env` — `MODELSCOPE_CACHE` unset, `HOME` set so `MS_DEFAULT_ROOT` resolves to a tmp dir with `models/Tongyi-MAI/Z-Image-Turbo/`. `resolve('Tongyi-MAI/Z-Image-Turbo')` returns `(<abs path>, 'ms_default')`.
+- `test_resolve_hits_l4_ms_default_when_no_env` — `MODELSCOPE_CACHE` unset, `HOME` set so `MS_DEFAULT_ROOT` resolves to a tmp dir with `models/Tongyi-MAI/Z-Image-Turbo/`. Assert `result.name == 'ms_default'`, `result.snapshot_for(...) == <abs path>`.
 
 **Happy path — L5 hit (L1-L4 miss)**
-- `test_resolve_hits_l5_cache_dir_hf` — no env vars set, `cache_dir=<tmp>` with HF layout `<tmp>/models--Tongyi-MAI--Z-Image-Turbo/snapshots/abc123/`. `resolve('Tongyi-MAI/Z-Image-Turbo', cache_dir=<tmp>)` returns `(<abs path>, 'cache_dir')`.
-- `test_resolve_hits_l5_cache_dir_ms` — same setup but MS layout `<tmp>/models/Tongyi-MAI/Z-Image-Turbo/`. Returns `(<abs path>, 'cache_dir')` (cache_dir is the source; layout is internal).
+- `test_resolve_hits_l5_cache_dir_hf` — no env vars set, `cache_dir=<tmp>` with HF layout `<tmp>/models--Tongyi-MAI--Z-Image-Turbo/snapshots/abc123/`. `result = resolve('Tongyi-MAI/Z-Image-Turbo', cache_dir=<tmp>)`. Assert `result.name == 'cache_dir'`, `result.snapshot_for(...) == <abs path>`.
+- `test_resolve_hits_l5_cache_dir_ms` — same setup but MS layout `<tmp>/models/Tongyi-MAI/Z-Image-Turbo/`. Assert `result.name == 'cache_dir'` (cache_dir is the source; layout is internal).
 
 **Happy path — L5 not appended when None**
-- `test_resolve_omits_l5_when_cache_dir_none` — L1-L4 all miss, `cache_dir=None` (default). `resolve` returns `None`; L5 is not consulted (verified by setting `cache_dir` to a path that would hit — `resolve` still returns `None` because `cache_dir` is `None`).
+- `test_resolve_omits_l5_when_cache_dir_none` — L1-L4 all miss, `cache_dir=None`. `resolve` returns `None`; L5 is not consulted (verified by setting `cache_dir` to a path that would hit — `resolve` still returns `None` because `cache_dir` is `None`).
 
 **First-hit-wins (priority order)**
-- `test_resolve_first_hit_wins` — both L1 and L2 contain the model. `resolve` returns `('hf_env', ...)` — L1 wins by walk order, not by tree comparison. (Confirms 03 §3.2 step 3.)
+- `test_resolve_first_hit_wins` — both L1 and L2 contain the model. `result = resolve(...)`. Assert `result.name == 'hf_env'` — L1 wins by walk order, not by tree comparison. (Confirms 03 §3.2 step 2.)
 
 **All miss → None**
 - `test_resolve_returns_none_when_all_levels_miss` — env vars set, no levels contain the model, `cache_dir=None`. `resolve` returns `None`. Same for `cache_dir=<some non-existent path>`.
 - `test_resolve_returns_none_for_malformed_model_id` — `resolve('no-slash')` → all levels return `None` from `snapshot_for` (no `/` to split on) → `resolve` returns `None`. Same for `resolve('a/b/c/too-many')` — `os.path.join` handles extra `/` but `models--a--b--c--too-many` won't exist.
 
 **Type-safety**
-- `test_resolve_returns_tuple_of_str_and_cache_source` — on hit, return value is `tuple[str, str]` and second element is in `CacheSource` literal set. On miss, return is `None`. (Type-level: `Optional[Tuple[str, CacheSource]]`.)
+- `test_resolve_returns_cache_level_or_none` — on hit, return value is a `CacheLevel` instance whose `name` ∈ `CacheSource` literal set. On miss, return is `None`. (Type-level: `Optional[CacheLevel]`.)
 
 ### 3.3 `walk_levels`
 
