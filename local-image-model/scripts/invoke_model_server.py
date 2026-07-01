@@ -2,6 +2,8 @@ import base64
 import os
 import sys
 import time
+import tempfile
+import shutil
 from pathlib import Path
 
 from typing import Optional, Union, List, Literal
@@ -12,6 +14,7 @@ from typeguard import typechecked
 
 from .list_model_servers import list_model_servers, ModelServerState, BASE_DIR
 from .start_model_server import HOST, REPO_ID_NOT_FOUND
+from .local_http_server import local_http_server
 
 DEFAULT_OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
@@ -83,22 +86,31 @@ def invoke_model_server(
             image = [image]
         
         image = [os.path.expanduser(path) for path in image]
-        
-        for path in image:
-            if not os.path.exists(path):
-                raise ValueError(f"{path} not exists")
-        
-        image_text = ', '.join(image)
-        print(f"Editing image with prompt: {prompt}, image: {image_text}", flush=True, file=sys.stderr)
+        print(f"Editing image with prompt: {prompt}, image: {', '.join(image)}", flush=True, file=sys.stderr)
 
-        response = client.images.edit(
-            prompt=prompt,
-            model=repo_id,
-            image=[],
-            n=n,
-            size=size,
-            extra_body=extra_body
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            new_file_names = []
+            for i, path in enumerate(image):
+                if not os.path.exists(path):
+                    raise ValueError(f"{path} not exists")
+                _, ext = os.path.splitext(path)
+                new_file_name = f'{i}{ext}'
+                shutil.copy2(path, os.path.join(temp_dir, new_file_name))
+                new_file_names.append(new_file_name)
+        
+            with local_http_server(temp_dir) as url:
+                extra_body['url'] = [f'{url}/{name}' for name in new_file_names]
+                print(f'extra_body: {extra_body}', flush=True, file=sys.stderr)
+
+                response = client.images.edit(
+                    prompt=prompt,
+                    model=repo_id,
+                    image=[],
+                    n=n,
+                    size=size,
+                    extra_body=extra_body
+                )
 
     if filename is None:
         filename = os.path.join(DEFAULT_OUTPUT_DIR, f"{int(time.time())}.png")

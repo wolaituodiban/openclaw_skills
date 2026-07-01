@@ -1,4 +1,5 @@
 import subprocess
+import os
 from typing import Optional, Literal
 from dataclasses import dataclass
 
@@ -49,7 +50,8 @@ def start_model_server(repo_id: str) -> StartModelServerResult:
 
     # 启动模型服务的逻辑
     p = subprocess.Popen(
-        ["vllm", "serve", model_cache.local_path, "--omni", "--port", str(port), "--host", HOST],
+        ["vllm", "serve", repo_id, "--omni", "--port", str(port), "--host", HOST],
+        env={**os.environ, "VLLM_USE_MODELSCOPE": "True", "HF_HUB_OFFLINE": "1"}
     )
 
     model_server_state=ModelServerState(

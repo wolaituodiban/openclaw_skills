@@ -98,7 +98,7 @@ async def invoke_model_server(
     Args:
         prompt (str): (required) Text description of the desired image
         filename (str): filename for output, must be full path
-        repo_id (str): hugging face style model repo id
+        repo_id (str): hugging face style model repo id, default to the first repo id with server
         image (str or list of str): path of The image(s) to edit.
         size (str): Image dimensions in WxH format (e.g., "1024x1024", "512x512"), when set to auto, it decide size from first input image.
         n (int): Number of images to generate (1-10)

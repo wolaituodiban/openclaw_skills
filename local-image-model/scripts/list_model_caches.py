@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from typing import Generator, Literal
 
 from typeguard import typechecked
+from modelscope_hub._cache_manager import scan_cache
 from .list_model_servers import list_model_servers, ModelServerState
 
 
-MODEL_SCOPE_CACHE_DIR = os.path.expanduser('~/.cache/modelscope/hub/models')
+MODEL_SCOPE_CACHE_DIR = scan_cache().cache_dir
+print(f'using modelscope_hub cache dir: {MODEL_SCOPE_CACHE_DIR}')
 
 
 @typechecked

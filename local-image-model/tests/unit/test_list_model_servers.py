@@ -38,6 +38,7 @@ class TestListModelServers(unittest.TestCase):
         self.patcher.stop()
 
     def test_empty_file(self):
+        self.tmp_file.close()
         result = list(list_model_servers())
         self.assertEqual(result, [])
         # 然后文件应该被自动创建成 []
