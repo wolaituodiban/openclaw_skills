@@ -18,34 +18,31 @@ from scripts.mcp_server import (
 
 class TestLifeCycle(unittest.IsolatedAsyncioTestCase):
     async def test_life_cycle(self):
-        print('release_model_server')
-        result = await release_model_server(repo_id='Tongyi-MAI/Z-Image-Turbo')
-        print(result)
-
         print('list_model_caches')
-        result = await list_model_caches()
-        print(result)
+        model_caches = await list_model_caches()
+        model_caches = json.loads(model_caches)
+        print(model_caches)
 
         print('start_model_server')
-        result = await start_model_server('Tongyi-MAI/Z-Image-Turbo')
+        result = await start_model_server(model_caches[0]['local_path'])
         print(result)
 
         loading = True
         while loading:
             print('list_model_servers')
-            result = await list_model_servers()
-            print(result)
+            server_infos = await list_model_servers()
+            print(server_infos)
             time.sleep(5)
             
-            result = json.loads(result)
-            for item in result:
+            server_infos = json.loads(server_infos)
+            for item in server_infos:
                 if item['status'] != 'loading':
                     loading = False
 
         print('invoke_model_server')
         result = await invoke_model_server(
             prompt='minimax-m3的编程能力相当于非软件专业低年级大学生水平，单个库能用，不会组合，写代码凭印象，不会查文档，解释原理靠想象，不看源码。',
-            repo_id='Tongyi-MAI/Z-Image-Turbo',
+            repo_id=server_infos[0]['repo_id'],
             filename='~/.openclaw/example.png',
             num_inference_steps=20,
         )
@@ -54,14 +51,14 @@ class TestLifeCycle(unittest.IsolatedAsyncioTestCase):
         print('invoke_model_server')
         result = await invoke_model_server(
             prompt='在原图的基础上给minimax-m3画一个猪的形象',
-            filename='~/.openclaw/example_0.png',
-            image='~/.openclaw/example.png',
+            filename='~/.openclaw/example.png',
+            image='~/.openclaw/example_0.png',
             num_inference_steps=20,
         )
         print(result)
 
         print('release_model_server')
-        result = await release_model_server(repo_id='Tongyi-MAI/Z-Image-Turbo')
+        result = await release_model_server(pid=server_infos[0]['pid'])
         print(result)
 
 

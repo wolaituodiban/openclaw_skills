@@ -10,27 +10,27 @@ import sys
 SKILL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../')
 sys.path.append(SKILL_DIR)
 
-import scripts.list_model_servers
-import scripts.list_model_caches
-from scripts.start_model_server import start_model_server
+from scripts.start_model_server import start_model_server, MAX_SERVERS_REACHED, LOCAL_PATH_NOT_FOUND, STARTED
+from scripts.list_model_caches import ModelCache
 
 
 class TestStartModelServer(unittest.TestCase):
     def setUp(self):
-        # 创建一个临时目录，作为 model server 的 local_path
-        self.tmp_cache_dir = tempfile.TemporaryDirectory()
+        # patch list_model_cache
+        self.local_path = "/haha/haha"
 
-        # patch MODEL_SCOPE_CACHE_DIR
-        self.patcher_cache_dir = patch(
-            "scripts.list_model_caches.MODEL_SCOPE_CACHE_DIR",
-            self.tmp_cache_dir.name,
+        self.patcher_list_model_cache = patch(
+            "scripts.start_model_server.list_model_caches",
+            return_value=[
+                ModelCache(
+                    repo_id="Tongyi-MAI/Z-Image-Turbo",
+                    local_path=self.local_path,
+                    model_server_states=[],
+                )
+            ]
         )
-        self.patcher_cache_dir.start()
+        self.patcher_list_model_cache.start()
 
-        self.z_image_path = os.path.join(self.tmp_cache_dir.name, "Tongyi-MAI/Z-Image-Turbo")
-        self.qwen_image_path = os.path.join(self.tmp_cache_dir.name, "Qwen/Qwen-Image")
-        os.makedirs(self.z_image_path, exist_ok=True)
-        os.makedirs(self.qwen_image_path, exist_ok=True)
 
         # 每个 test 拿到一个独立的临时 service.json
         self.tmp_json = tempfile.NamedTemporaryFile(
@@ -44,13 +44,13 @@ class TestStartModelServer(unittest.TestCase):
                     "pid": os.getpid(),
                     "port": 5678,
                     "repo_id": "Tongyi-MAI/Z-Image-Turbo",
-                    "local_path": self.z_image_path,
+                    "local_path": 'test1',
                 },
                 {
                     "pid": 2345,
                     "port": 6789,
                     "repo_id": "Qwen/Qwen-Image",
-                    "local_path": self.qwen_image_path,
+                    "local_path": 'test2',
                 }
             ], f, ensure_ascii=True)
 
@@ -72,8 +72,7 @@ class TestStartModelServer(unittest.TestCase):
         self.patcher_httpx.start()
 
     def tearDown(self):
-        self.tmp_cache_dir.cleanup()
-        self.patcher_cache_dir.stop()
+        self.patcher_list_model_cache.stop()
         self.tmp_json.close()
         self.patcher_json.stop()
         self.patcher_httpx.stop()
@@ -81,26 +80,27 @@ class TestStartModelServer(unittest.TestCase):
     def test_has_loaded_model(self):
         
         result = start_model_server("Tongyi-MAI/Z-Image-Turbo")
-        self.assertEqual(result.status, 'max_servers_reached')
+        self.assertEqual(result.status, MAX_SERVERS_REACHED)
 
     def test_repo_id_not_found(self):
         self.tmp_json.close()
 
         result = start_model_server("a")
-        self.assertEqual(result.status, 'repo_id_not_found')
+        self.assertEqual(result.status, LOCAL_PATH_NOT_FOUND)
 
     def test_start_model_server(self):
         self.tmp_json.close()
         
-        result = start_model_server("Tongyi-MAI/Z-Image-Turbo")
+        result = start_model_server(self.local_path)
+
         # 清理启动的模型服务进程
         os.kill(result.model_server_state.pid, signal.SIGTERM)
         print(f"Cleaned up model server process with PID {result.model_server_state.pid}", flush=True, file=sys.stderr)
-
+        
         # 判断result
-        self.assertEqual(result.status, 'start')
         self.assertEqual(result.model_server_state.repo_id, "Tongyi-MAI/Z-Image-Turbo")
-
+        self.assertEqual(result.status, STARTED)
+        
         # state文件item + 1
         with open(self.tmp_json.name, 'r') as file:
             json_object = json.load(file)

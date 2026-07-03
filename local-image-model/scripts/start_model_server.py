@@ -15,33 +15,39 @@ GLOBAL_MAX_MODEL_SERVERS = 1
 HOST = "127.0.0.1"
  
 MAX_SERVERS_REACHED = 'max_servers_reached'
-REPO_ID_NOT_FOUND = 'repo_id_not_found'
-START = 'start'
+LOCAL_PATH_NOT_FOUND = 'local_path_not_found'
+STARTED = 'started'
 
 @typechecked
 @dataclass(frozen=True)
 class StartModelServerResult:
-    status: Literal[MAX_SERVERS_REACHED, REPO_ID_NOT_FOUND, START]
+    status: Literal[MAX_SERVERS_REACHED, LOCAL_PATH_NOT_FOUND, STARTED]
     model_server_state: Optional[ModelServerState] = None
 
     def __post_init__(self):
-        if self.status not in (MAX_SERVERS_REACHED, REPO_ID_NOT_FOUND, START):
-            raise ValueError(f"status must be one of {MAX_SERVERS_REACHED}, {REPO_ID_NOT_FOUND}, {START}, got {self.status}")
+        if self.status not in (MAX_SERVERS_REACHED, LOCAL_PATH_NOT_FOUND, STARTED):
+            raise ValueError(f"status must be one of {MAX_SERVERS_REACHED}, {LOCAL_PATH_NOT_FOUND}, {STARTED}, got {self.status}")
         if self.model_server_state is not None and not isinstance(self.model_server_state, ModelServerState):
             raise TypeError(f"model_server_state must be a ModelServerState instance or None, got {type(self.model_server_state)}")
 
 
 @typechecked
-def start_model_server(repo_id: str) -> StartModelServerResult:
+def start_model_server(local_path: str) -> StartModelServerResult:
+    """
+    
+    Args:
+        local_path: 模型文件夹的绝对路径
+    """
     model_servers = list(list_model_servers())
     if len(model_servers) >= GLOBAL_MAX_MODEL_SERVERS:
         return StartModelServerResult(status=MAX_SERVERS_REACHED)
 
+    print(list(list_model_caches()))
     for model_cache in list_model_caches():
-        if model_cache.repo_id == repo_id:
+        if model_cache.local_path == local_path:
             break
     else:
-        return StartModelServerResult(status=REPO_ID_NOT_FOUND)
+        return StartModelServerResult(status=LOCAL_PATH_NOT_FOUND)
     
     # Find an available port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -50,8 +56,8 @@ def start_model_server(repo_id: str) -> StartModelServerResult:
 
     # 启动模型服务的逻辑
     p = subprocess.Popen(
-        ["vllm", "serve", repo_id, "--omni", "--port", str(port), "--host", HOST],
-        env={**os.environ, "VLLM_USE_MODELSCOPE": "True", "HF_HUB_OFFLINE": "1"}
+        ["vllm", "serve", local_path, "--omni", "--port", str(port), "--host", HOST],
+        # env={**os.environ, "VLLM_USE_MODELSCOPE": "True", "HF_HUB_OFFLINE": "1"}
     )
 
     model_server_state=ModelServerState(
@@ -65,4 +71,4 @@ def start_model_server(repo_id: str) -> StartModelServerResult:
     model_servers.append(model_server_state)
     dump_model_server_states(model_servers)
 
-    return StartModelServerResult(status=START, model_server_state=model_server_state)
+    return StartModelServerResult(status=STARTED, model_server_state=model_server_state)

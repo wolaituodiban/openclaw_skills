@@ -1,14 +1,12 @@
 import os
+import subprocess
+import re
 from dataclasses import dataclass
 from typing import Generator, Literal
 
 from typeguard import typechecked
 from modelscope_hub._cache_manager import scan_cache
 from .list_model_servers import list_model_servers, ModelServerState
-
-
-MODEL_SCOPE_CACHE_DIR = scan_cache().cache_dir
-print(f'using modelscope_hub cache dir: {MODEL_SCOPE_CACHE_DIR}')
 
 
 @typechecked
@@ -57,19 +55,16 @@ class ModelCache:
 
 @typechecked
 def list_model_caches() -> Generator[ModelCache, None, None]:
-    if not os.path.exists(MODEL_SCOPE_CACHE_DIR):
-        return []
-    
     model_server_states = list(list_model_servers())
+
+    # 运行modelscope cli
+    cache_info = scan_cache()
     
-    for a in os.listdir(MODEL_SCOPE_CACHE_DIR):
-        a_path = os.path.join(MODEL_SCOPE_CACHE_DIR, a)
-        for b in os.listdir(a_path):
-            repo_id = f"{a}/{b}"
-            local_path = os.path.join(MODEL_SCOPE_CACHE_DIR, repo_id)
-            yield ModelCache(
-                repo_id=repo_id,
-                local_path=local_path,
-                model_server_states=[state for state in model_server_states if state.repo_id.strip() == repo_id.strip()]
-            )
-        
+    # 输出结构化ModelCache信息
+    for repo in cache_info.repos:
+        local_path = os.path.join(repo.local_path, 'snapshots', 'master')
+        yield ModelCache(
+            repo_id=repo.repo_id,
+            local_path=local_path,
+            model_server_states=[server for server in model_server_states if server.local_path == local_path]
+        )

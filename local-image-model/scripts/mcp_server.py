@@ -66,15 +66,15 @@ async def list_model_caches() -> str:
 
 
 @mcp.tool()
-async def start_model_server(repo_id: str) -> str:
+async def start_model_server(local_path: str) -> str:
     """
     starting a model server
 
     Args:
-        repo_id: hugging face style model repo id
+        local_path: absolute path of model repo
     """
 
-    result = _start_model_server(repo_id)
+    result = _start_model_server(local_path)
     return json.dumps(asdict(result), indent=2, ensure_ascii=False)
 
 

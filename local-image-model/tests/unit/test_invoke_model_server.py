@@ -43,7 +43,7 @@ class TestInvokeModelServer(unittest.TestCase):
                     pid=1234,
                     port=5678,
                     repo_id="Tongyi-MAI/Z-Image-Turbo",
-                    local_path="/tmp/model_server",
+                    local_path="/home/cxt/.cache/modelscope/models/Tongyi-MAI--Z-Image-Turbo",
                 )
             ]
         )
