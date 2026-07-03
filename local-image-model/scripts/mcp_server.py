@@ -79,6 +79,7 @@ async def invoke_model_server(
     guidance_scale: Optional[float] = None,
     true_cfg_scale: Optional[float] = None,
     seed: Optional[int] = None,
+    divisor: int = 16,
 ):
     """
     invoke model, when image is provided, invoke edit, else invoke generate
@@ -95,6 +96,7 @@ async def invoke_model_server(
         guidance_scale (float): Classifier-free guidance scale (typically 0.0-20.0)
         true_cfg_scale (float): True CFG scale (model-specific parameter, may be ignored if not supported)
         seed (int): Random seed for reproducibility
+        divisor: 自动将size转换成divisor的整数倍
     """
     result = _invoke_model_server(
         prompt=prompt,
@@ -107,7 +109,8 @@ async def invoke_model_server(
         num_inference_steps=num_inference_steps,
         guidance_scale=guidance_scale,
         true_cfg_scale=true_cfg_scale,
-        seed=seed
+        seed=seed,
+        divisor=divisor
     )
     return json.dumps(asdict(result), indent=2, ensure_ascii=False)
 

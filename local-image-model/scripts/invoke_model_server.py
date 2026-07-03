@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Union, List, Literal
 from dataclasses import dataclass
 
+from PIL import Image
 from openai import OpenAI
 from typeguard import typechecked
 
@@ -48,6 +49,7 @@ def invoke_model_server(
     guidance_scale: Optional[float] = None,
     true_cfg_scale: Optional[float] = None,
     seed: Optional[int] = None,
+    divisor: int = 16,
 ) -> InvokeModelServerResult:
 
     for server in list_model_servers():
@@ -82,9 +84,19 @@ def invoke_model_server(
     else:
         if isinstance(image, str):
             image = [image]
+
+        # 将size转换成divisor的整数倍
+        if size is None or size == 'auto':
+            w, h = Image.open(os.path.expanduser(image[0])).size
+        else:
+            w, h = size.split("x")
         
-        # image = [os.path.expanduser(path) for path in image]
-        print(f"Editing image with prompt: {prompt}, image: {', '.join(image)}", flush=True, file=sys.stderr)
+        w = w // divisor * divisor
+        h = h //divisor * divisor
+
+        size = f'{w}x{h}'
+        
+        print(f"Editing image with prompt: {prompt}, image: {', '.join(image)}, size={size}", flush=True, file=sys.stderr)
         
         with local_http_server(image) as url_map:
             extra_body['url'] = list(url_map.values())
