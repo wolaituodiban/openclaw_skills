@@ -30,6 +30,7 @@ class TestListModelCaches(unittest.TestCase):
                     port=5678,
                     repo_id="Tongyi-MAI/Z-Image-Turbo",
                     local_path="/home/cxt/.cache/modelscope/models/Tongyi-MAI--Z-Image-Turbo",
+                    log_path='haha'
                 )
             ]
         )

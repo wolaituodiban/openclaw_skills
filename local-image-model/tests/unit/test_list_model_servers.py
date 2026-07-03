@@ -53,6 +53,7 @@ class TestListModelServers(unittest.TestCase):
                 "port": 5678,
                 "repo_id": "Tongyi-MAI/Z-Image-Turbo",
                 "local_path": self.tmp_local_path.name,
+                "log_path": 'haha'
             }], f, ensure_ascii=True)
 
         # pid 1234 不是当前进程，os.kill(1234, 0) 会抛 OSError
@@ -68,6 +69,7 @@ class TestListModelServers(unittest.TestCase):
                 "port": 5678,
                 "repo_id": "Tongyi-MAI/Z-Image-Turbo",
                 "local_path": self.tmp_local_path.name,
+                "log_path": 'haha'
             }], f, ensure_ascii=True)
 
         mock_resp = MagicMock()
@@ -86,6 +88,7 @@ class TestListModelServers(unittest.TestCase):
                 "port": 5678,
                 "repo_id": "Tongyi-MAI/Z-Image-Turbo",
                 "local_path": self.tmp_local_path.name,
+                "log_path": 'haha'
             }], f, ensure_ascii=True)
 
         mock_resp = MagicMock()

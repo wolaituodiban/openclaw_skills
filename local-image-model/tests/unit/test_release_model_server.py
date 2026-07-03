@@ -27,6 +27,7 @@ class TestReleaseModelServer(unittest.TestCase):
                         port=5678,
                         repo_id="Tongyi-MAI/Z-Image-Turbo",
                         local_path="/tmp/model_server",
+                        log_path='haha'
                     )
                 ],
                 file

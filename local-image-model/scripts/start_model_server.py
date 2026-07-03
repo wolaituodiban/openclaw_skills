@@ -1,5 +1,6 @@
 import subprocess
 import os
+import time
 from typing import Optional, Literal
 from dataclasses import dataclass
 
@@ -8,7 +9,7 @@ from typeguard import typechecked
 
 
 from .list_model_caches import list_model_caches
-from .list_model_servers import ModelServerState, list_model_servers, dump_model_server_states
+from .list_model_servers import ModelServerState, list_model_servers, dump_model_server_states, BASE_DIR
 
 
 GLOBAL_MAX_MODEL_SERVERS = 1
@@ -54,17 +55,26 @@ def start_model_server(local_path: str) -> StartModelServerResult:
         s.bind((HOST, 0))
         port = s.getsockname()[1]
 
+    # log file
+    log_path = os.path.join(BASE_DIR, 'logs', f'vllm-omni-{time.time()}.log')
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
     # 启动模型服务的逻辑
-    p = subprocess.Popen(
-        ["vllm", "serve", local_path, "--omni", "--port", str(port), "--host", HOST],
-        # env={**os.environ, "VLLM_USE_MODELSCOPE": "True", "HF_HUB_OFFLINE": "1"}
-    )
+    with open(log_path, 'a', buffering=1) as log: 
+        p = subprocess.Popen(
+            ["vllm", "serve", local_path, "--omni", "--port", str(port), "--host", HOST],
+            stdout=log,
+            stderr=subprocess.STDOUT,                       # 合并到 stdout
+            start_new_session=True,                         # 独立进程组
+            env={**os.environ, 'VLLM_LOGGING_LEVEL': 'DEBUG'},
+        )
 
     model_server_state=ModelServerState(
         pid=p.pid,
         port=port,
         repo_id=model_cache.repo_id,
         local_path=model_cache.local_path,
+        log_path=log_path
     )
 
     # 新服务落盘

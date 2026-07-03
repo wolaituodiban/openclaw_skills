@@ -1,7 +1,7 @@
 import json
 import sys
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Generator, Literal, List
 
 import httpx
@@ -18,6 +18,7 @@ class ModelServerState:
     port: int
     repo_id: str
     local_path: str
+    log_path: str
 
     def __post_init__(self):
         if not isinstance(self.pid, int):
@@ -28,6 +29,8 @@ class ModelServerState:
             raise TypeError(f"repo_id must be a string, got {type(self.repo_id)}")
         if not isinstance(self.local_path, str):
             raise TypeError(f"local_path must be a string, got {type(self.local_path)}")
+        if not isinstance(self.log_path, str):
+            raise TypeError(f"log_path must be a string, got {type(self.log_path)}")
 
     @property
     def status(self) -> Literal["stopped", "loading", "loaded"]:
@@ -55,12 +58,9 @@ class ModelServerState:
 @typechecked
 def dump_model_server_states(model_servers: List[ModelServerState])-> None:
     with open(SERVICE_JSON_PATH, "w") as f:
-        json.dump([{
-            "pid": ms.pid,
-            "port": ms.port,
-            "repo_id": ms.repo_id,
-            "local_path": ms.local_path,
-        } for ms in model_servers], f, indent=4)
+        json.dump([
+            dict(pid=ms.pid, port=ms.port, repo_id=ms.repo_id, local_path=ms.local_path, log_path=ms.log_path)
+            for ms in model_servers], f, indent=4)
     print(f'write to {SERVICE_JSON_PATH} with {len(model_servers)} servers', flush=True, file=sys.stderr)
 
 
@@ -93,6 +93,7 @@ def list_model_servers() -> Generator[ModelServerState, None, None]:
                 port=item["port"],
                 repo_id=item["repo_id"],
                 local_path=item["local_path"],
+                log_path=item['log_path'],
             )
         except Exception as e:
             print(f'[fatal] failed to transform item ({i}) {item} into ModelServerState', flush=True, file=sys.stderr)

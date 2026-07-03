@@ -1,5 +1,3 @@
-import atexit
-import signal
 import os
 import json
 from typing import Optional, Union, List
@@ -13,16 +11,6 @@ from .list_model_caches import list_model_caches as _list_model_caches
 from .start_model_server import start_model_server as _start_model_server
 from .invoke_model_server import invoke_model_server as _invoke_model_server
 from .release_model_server import release_model_server as _release_model_server
-
-
-def cleanup():
-    for s in _list_model_servers():
-        try:
-            os.killpg(s.pid, signal.SIGTERM)
-        except OSError:
-            pass
-
-atexit.register(cleanup)
 
 
 mcp_name = os.path.basename(os.path.dirname(os.path.dirname(__file__)))

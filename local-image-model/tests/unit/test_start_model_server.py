@@ -45,12 +45,14 @@ class TestStartModelServer(unittest.TestCase):
                     "port": 5678,
                     "repo_id": "Tongyi-MAI/Z-Image-Turbo",
                     "local_path": 'test1',
+                    "log_path": 'haha'
                 },
                 {
                     "pid": 2345,
                     "port": 6789,
                     "repo_id": "Qwen/Qwen-Image",
                     "local_path": 'test2',
+                    "log_path": 'haha'
                 }
             ], f, ensure_ascii=True)
 
@@ -100,6 +102,9 @@ class TestStartModelServer(unittest.TestCase):
         # 判断result
         self.assertEqual(result.model_server_state.repo_id, "Tongyi-MAI/Z-Image-Turbo")
         self.assertEqual(result.status, STARTED)
+
+        # 判断log file存在
+        self.assertTrue(os.path.exists(result.model_server_state.log_path))
         
         # state文件item + 1
         with open(self.tmp_json.name, 'r') as file:
