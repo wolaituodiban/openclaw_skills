@@ -33,11 +33,15 @@ class StartModelServerResult:
 
 
 @typechecked
-def start_model_server(local_path: str) -> StartModelServerResult:
+def start_model_server(
+    local_path: str,
+    quantization: Optional[Literal['fp8', 'int8']]=None
+) -> StartModelServerResult:
     """
     
     Args:
         local_path: 模型文件夹的绝对路径
+        quantization: 量化类型，fp8 or int8
     """
     model_servers = list(list_model_servers())
     if len(model_servers) >= GLOBAL_MAX_MODEL_SERVERS:
@@ -61,8 +65,11 @@ def start_model_server(local_path: str) -> StartModelServerResult:
 
     # 启动模型服务的逻辑
     with open(log_path, 'a', buffering=1) as log: 
+        args =["vllm", "serve", local_path, "--omni", "--port", str(port), "--host", HOST]
+        if quantization is not None:
+            args += ['--quantization', quantization]
         p = subprocess.Popen(
-            ["vllm", "serve", local_path, "--omni", "--port", str(port), "--host", HOST],
+            args,
             stdout=log,
             stderr=subprocess.STDOUT,                       # 合并到 stdout
             start_new_session=True,                         # 独立进程组

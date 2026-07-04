@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Literal
 from dataclasses import asdict
 
 from typeguard import typechecked
@@ -54,15 +54,18 @@ async def list_model_caches() -> str:
 
 
 @mcp.tool()
-async def start_model_server(local_path: str) -> str:
+async def start_model_server(
+    local_path: str,
+    quantization: Optional[Literal['fp8', 'int8']]=None
+) -> str:
     """
-    starting a model server
-
+    
     Args:
-        local_path: absolute path of model repo
+        local_path: 模型文件夹的绝对路径
+        quantization: 量化类型（fp8，int8），当模型文件大小超过本地显存是使用。可以使用nvidia-smi查看本地显存大小
     """
 
-    result = _start_model_server(local_path)
+    result = _start_model_server(local_path, quantization)
     return json.dumps(asdict(result), indent=2, ensure_ascii=False)
 
 

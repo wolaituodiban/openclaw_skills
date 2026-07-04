@@ -26,7 +26,10 @@ class TestLifeCycle(unittest.IsolatedAsyncioTestCase):
         target_cache = [model_cache for model_cache in model_caches if model_cache['repo_id'] == 'Tongyi-MAI/Z-Image-Turbo'][0]
 
         print('start_model_server')
-        result = await start_model_server(target_cache['local_path'])
+        result = await start_model_server(
+            target_cache['local_path'],
+            quantization='int8'
+        )
         print(result)
 
         loading = True
@@ -45,16 +48,7 @@ class TestLifeCycle(unittest.IsolatedAsyncioTestCase):
         result = await invoke_model_server(
             prompt='minimax-m3的编程能力相当于非软件专业低年级大学生水平，单个库能用，不会组合，写代码凭印象，不会查文档，解释原理靠想象，不看源码。',
             repo_id=server_infos[0]['repo_id'],
-            filename='~/.openclaw/example.png',
-            num_inference_steps=20,
-        )
-        print(result)
-
-        print('invoke_model_server')
-        result = await invoke_model_server(
-            prompt='在原图的基础上给minimax-m3画一个猪的形象',
-            filename='~/.openclaw/example.png',
-            image='~/.openclaw/example_0.png',
+            filename='~/.openclaw/example_quant.png',
             num_inference_steps=20,
         )
         print(result)
