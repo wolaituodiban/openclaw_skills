@@ -23,10 +23,9 @@ class TestLifeCycle(unittest.IsolatedAsyncioTestCase):
         model_caches = json.loads(model_caches)
         print(model_caches)
 
-        target_cache = [model_cache for model_cache in model_caches if model_cache['repo_id'] == 'Tongyi-MAI/Z-Image-Turbo'][0]
-
         print('start_model_server')
-        result = await start_model_server(target_cache['local_path'])
+        local_path = [model_cache['local_path'] for model_cache in model_caches if model_cache['repo_id'] == 'Tongyi-MAI/Z-Image-Turbo'][0]
+        result = await start_model_server(local_path)
         print(result)
 
         loading = True
@@ -53,7 +52,7 @@ class TestLifeCycle(unittest.IsolatedAsyncioTestCase):
         print('invoke_model_server')
         result = await invoke_model_server(
             prompt='在原图的基础上给minimax-m3画一个猪的形象',
-            filename='~/.openclaw/example.png',
+            filename='~/.openclaw/example_edit.png',
             image='~/.openclaw/example_0.png',
             num_inference_steps=20,
         )

@@ -56,15 +56,14 @@ async def list_model_caches() -> str:
 @mcp.tool()
 async def start_model_server(
     local_path: str,
-    quantization: Optional[Literal['fp8', 'int8']]=None
+    quantization: Optional[Literal['fp8', 'int8']]=None,
 ) -> str:
     """
     
     Args:
         local_path: 模型文件夹的绝对路径
-        quantization: 量化类型（fp8，int8），当模型文件大小超过本地显存是使用。可以使用nvidia-smi查看本地显存大小
+        quantization: 量化类型，fp8 or int8
     """
-
     result = _start_model_server(local_path, quantization)
     return json.dumps(asdict(result), indent=2, ensure_ascii=False)
 

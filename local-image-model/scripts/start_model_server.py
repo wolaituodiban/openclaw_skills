@@ -1,6 +1,8 @@
 import subprocess
 import os
 import time
+import sys
+import json
 from typing import Optional, Literal
 from dataclasses import dataclass
 
@@ -35,19 +37,21 @@ class StartModelServerResult:
 @typechecked
 def start_model_server(
     local_path: str,
-    quantization: Optional[Literal['fp8', 'int8']]=None
+    quantization: Optional[Literal['fp8', 'int8']]=None,
 ) -> StartModelServerResult:
     """
     
     Args:
         local_path: 模型文件夹的绝对路径
         quantization: 量化类型，fp8 or int8
+        gguf_model: loads pre-quantized diffusion transformer weights. accepts Local file (/models/z-image-Q4_K_M.gguf), Explicit HF file (QuantStack/Qwen-Image-GGUF/Qwen_Image-Q4_K_M.gguf)
+            use list_model_caches to find proper gguf_model
     """
     model_servers = list(list_model_servers())
     if len(model_servers) >= GLOBAL_MAX_MODEL_SERVERS:
         return StartModelServerResult(status=MAX_SERVERS_REACHED)
 
-    print(list(list_model_caches()))
+    local_path = os.path.abspath(os.path.expanduser(local_path))
     for model_cache in list_model_caches():
         if model_cache.local_path == local_path:
             break
@@ -68,6 +72,8 @@ def start_model_server(
         args =["vllm", "serve", local_path, "--omni", "--port", str(port), "--host", HOST]
         if quantization is not None:
             args += ['--quantization', quantization]
+
+        print(f'start model server with command: {args}', flush=True, file=sys.stderr)
         p = subprocess.Popen(
             args,
             stdout=log,

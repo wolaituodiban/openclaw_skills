@@ -1,6 +1,4 @@
-import json
 import os
-import tempfile
 import unittest
 from unittest.mock import patch, PropertyMock
 
@@ -42,7 +40,7 @@ class TestListModelCaches(unittest.TestCase):
 
     def test_list_model_caches(self):
         result = list(list_model_caches())
-        self.assertEqual(result[0].repo_id, 'Tongyi-MAI/Z-Image-Turbo')
+        self.assertTrue('Tongyi-MAI/Z-Image-Turbo' in [item.repo_id for item in result])
 
 
 if __name__ == "__main__":

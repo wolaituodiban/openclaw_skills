@@ -23,13 +23,10 @@ class TestLifeCycle(unittest.IsolatedAsyncioTestCase):
         model_caches = json.loads(model_caches)
         print(model_caches)
 
-        target_cache = [model_cache for model_cache in model_caches if model_cache['repo_id'] == 'Tongyi-MAI/Z-Image-Turbo'][0]
 
         print('start_model_server')
-        result = await start_model_server(
-            target_cache['local_path'],
-            quantization='int8'
-        )
+        local_path = [model_cache['local_path'] for model_cache in model_caches if model_cache['repo_id'] == 'Tongyi-MAI/Z-Image-Turbo'][0]
+        result = await start_model_server(local_path, quantization='int8')
         print(result)
 
         loading = True
